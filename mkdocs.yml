@@ -1,0 +1,64 @@
+site_name: COS — Community Observation Service
+site_description: Harmonized acquisition of non-streamflow hydrological observations for model evaluation and calibration
+site_url: https://darriey.github.io/COS/
+repo_url: https://github.com/DarriEy/COS
+repo_name: DarriEy/COS
+copyright: Copyright &copy; 2026 Darri Eythorsson — GPL-3.0-or-later
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - Quick Start: quickstart.md
+  - Canonical Contract: contract.md
+  - CLI: cli.md
+  - Connector Roster: roster.md
+  - SYMFLUENCE Integration: symfluence.md
+  - Architecture: architecture.md
+  - API Reference: reference.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - tables
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            show_source: false
+            show_root_heading: true
+            members_order: source
+            separate_signature: true
+            show_signature_annotations: true
