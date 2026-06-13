@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Test / type / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Venvs
+.venv/
+venv/
+env/
+
+# Docs
+site/
+
+# Data caches
+*.nc
+*.duckdb
+cos.yaml
+.DS_Store

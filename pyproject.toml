@@ -1,0 +1,136 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "community-observation-service"
+dynamic = ["version"]
+description = "Community Observation Service — harmonized acquisition of non-streamflow hydrological observations for model evaluation and calibration"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.11"
+authors = [
+    { name = "Darri Eythorsson", email = "dae5@hi.is" },
+]
+keywords = ["hydrology", "observations", "remote-sensing", "evaluation", "open-data", "time-series"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Hydrology",
+]
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2.0",
+    "pyarrow>=15.0",
+    "click>=8.0",
+    "pyyaml>=6.0",
+    "structlog>=24.0",
+    "tenacity>=8.0",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+# Gridded connectors (GRACE etc.) read NetCDF via xarray.
+gridded = [
+    "xarray>=2024.1",
+    "netcdf4>=1.6",
+]
+pandas = [
+    "pandas>=2.0",
+]
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.25",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "respx>=0.21",
+    "xarray>=2024.1",
+    "netcdf4>=1.6",
+    "pandas>=2.0",
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "types-PyYAML",
+]
+
+[project.urls]
+Homepage = "https://github.com/DarriEy/COS"
+Repository = "https://github.com/DarriEy/COS"
+Documentation = "https://darriey.github.io/COS/"
+Issues = "https://github.com/DarriEy/COS/issues"
+Changelog = "https://github.com/DarriEy/COS/blob/main/CHANGELOG.md"
+
+[project.scripts]
+cos = "cos.cli.main:cli"
+
+# SYMFLUENCE auto-discovers this on `import symfluence`. COS does NOT depend on
+# symfluence: the hook is simply never loaded when symfluence is absent, and
+# cos.integrations.symfluence imports cleanly either way.
+[project.entry-points."symfluence.plugins"]
+cos = "cos.integrations.symfluence:register"
+
+[tool.hatch.version]
+path = "src/cos/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cos"]
+
+[tool.ruff]
+src = ["src"]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM"]
+ignore = ["B905"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "--cov=cos --cov-report=term-missing:skip-covered"
+markers = [
+    "network: test reaches a real upstream API; deselected in CI via -m 'not network'",
+]
+
+[tool.coverage.run]
+source = ["cos"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+# Hermetic suite measures ~85%; floor set a couple points below. Live-fetch and
+# symfluence-only branches are pragma'd.
+fail_under = 82
+precision = 0
+sort = "Cover"
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+
+# pyarrow ships no type stubs. pandas/xarray/netCDF4 are optional extras; mypy
+# must pass whether or not they are installed. symfluence is never a dependency —
+# cos.integrations.symfluence imports it defensively and degrades when absent.
+[[tool.mypy.overrides]]
+module = [
+    "pyarrow", "pyarrow.*",
+    "pandas", "pandas.*",
+    "xarray", "xarray.*",
+    "netCDF4", "netCDF4.*",
+    "symfluence", "symfluence.*",
+]
+ignore_missing_imports = true

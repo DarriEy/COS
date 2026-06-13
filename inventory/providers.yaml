@@ -1,0 +1,268 @@
+# COS — Community Observation Service: connector roster (honest)
+#
+# Non-streamflow hydrological observations only. Streamflow is CSFS's; COS never
+# duplicates it. See papers/cos_design.md §5.
+#
+# status values (mirror CSFS):
+#   implemented  — connector exists in cos/connectors/ (and is registered)
+#   planned      — clear API, prioritized
+#   research     — API exists but needs investigation / is registration-gated
+#   manual       — no open API; requires staging
+#   fallback     — community/research dataset for gap-filling
+#
+# structural_class: gridded | point_network | flux_tower
+# auth: none | earthdata | cds | openet | ameriflux | manual
+
+# ── IMPLEMENTED (the three proof connectors) ──────────────────────────────
+
+- slug: grace
+  name: NASA GRACE/GRACE-FO TWS
+  kind: tws
+  structural_class: gridded
+  auth: earthdata
+  status: implemented
+  notes: >-
+    Mascon liquid-water-equivalent grids; basin-mean / nearest-cell reduction,
+    cm->mm, 2003-2008 anomaly baseline. Reduce path hermetically tested with a
+    synthetic NetCDF; live fetch needs Earthdata. No native parity grade yet.
+
+- slug: snotel
+  name: NRCS SNOTEL (AWDB)
+  kind: swe
+  structural_class: point_network
+  auth: none
+  status: implemented
+  notes: >-
+    Anonymous AWDB report CSV; inches->mm at the connector boundary. LIVE-SMOKED.
+    Native snotel.py keeps inches — parity is therefore unit-sensitive, TBD.
+
+- slug: openet
+  name: OpenET ensemble ET
+  kind: et
+  structural_class: flux_tower
+  auth: openet
+  status: implemented
+  notes: >-
+    Keyed ensemble ET timeseries API; mm/period->mm/day. Parse path hermetically
+    tested with synthetic JSON; live fetch needs an OpenET key. No parity grade yet.
+
+# ── TWS ────────────────────────────────────────────────────────────────────
+
+- slug: gldas_tws
+  name: GLDAS-derived TWS
+  kind: tws
+  structural_class: gridded
+  auth: earthdata
+  status: planned
+
+- slug: cnes_grgs_tws
+  name: CNES/GRGS RL TWS grids
+  kind: tws
+  structural_class: gridded
+  auth: none
+  status: planned
+
+# ── SWE ────────────────────────────────────────────────────────────────────
+
+- slug: canswe
+  name: CanSWE historical SWE
+  kind: swe
+  structural_class: point_network
+  auth: none
+  status: planned
+
+- slug: norswe
+  name: NorSWE Nordic SWE
+  kind: swe
+  structural_class: point_network
+  auth: none
+  status: planned
+
+# ── Snow cover ───────────────────────────────────────────────────────────
+
+- slug: modis_snow
+  name: MODIS snow cover (MOD10)
+  kind: snow_cover
+  structural_class: gridded
+  auth: earthdata
+  status: planned
+
+- slug: viirs_snow
+  name: VIIRS snow cover
+  kind: snow_cover
+  structural_class: gridded
+  auth: earthdata
+  status: planned
+
+- slug: ims_snow
+  name: NOAA IMS snow cover
+  kind: snow_cover
+  structural_class: gridded
+  auth: none
+  status: planned
+
+- slug: snodas
+  name: NOHRSC SNODAS
+  kind: snow_cover
+  structural_class: gridded
+  auth: none
+  status: research
+
+- slug: cmc_snow
+  name: CMC daily snow depth
+  kind: snow_cover
+  structural_class: gridded
+  auth: none
+  status: planned
+
+# ── ET ──────────────────────────────────────────────────────────────────────
+
+- slug: modis_et
+  name: MODIS ET (MOD16)
+  kind: et
+  structural_class: gridded
+  auth: earthdata
+  status: planned
+
+- slug: gleam
+  name: GLEAM ET
+  kind: et
+  structural_class: gridded
+  auth: manual
+  status: research
+
+- slug: fluxnet
+  name: FLUXNET / AmeriFlux flux towers
+  kind: et
+  structural_class: flux_tower
+  auth: ameriflux
+  status: planned
+
+- slug: fluxcom
+  name: FLUXCOM upscaled ET
+  kind: et
+  structural_class: gridded
+  auth: manual
+  status: research
+
+- slug: ssebop
+  name: SSEBop actual ET
+  kind: et
+  structural_class: gridded
+  auth: none
+  status: planned
+
+# ── Soil moisture ────────────────────────────────────────────────────────
+
+- slug: smap
+  name: NASA SMAP L3 soil moisture
+  kind: soil_moisture
+  structural_class: gridded
+  auth: earthdata
+  status: planned
+
+- slug: ismn
+  name: International Soil Moisture Network
+  kind: soil_moisture
+  structural_class: point_network
+  auth: manual
+  status: research
+
+- slug: smos
+  name: ESA SMOS soil moisture
+  kind: soil_moisture
+  structural_class: gridded
+  auth: manual
+  status: research
+
+- slug: ascat
+  name: EUMETSAT ASCAT soil moisture
+  kind: soil_moisture
+  structural_class: gridded
+  auth: manual
+  status: research
+
+- slug: esa_cci_sm
+  name: ESA CCI merged soil moisture
+  kind: soil_moisture
+  structural_class: gridded
+  auth: manual
+  status: research
+
+- slug: sentinel1_sm
+  name: Sentinel-1 derived soil moisture
+  kind: soil_moisture
+  structural_class: gridded
+  auth: earthdata
+  status: research
+
+# ── Groundwater ──────────────────────────────────────────────────────────
+
+- slug: usgs_gw
+  name: USGS groundwater levels (NWIS gw)
+  kind: groundwater
+  structural_class: point_network
+  auth: none
+  status: planned
+
+- slug: ggmn
+  name: UN-IGRAC GGMN wells
+  kind: groundwater
+  structural_class: point_network
+  auth: none
+  status: planned
+
+# ── Vegetation / LST ─────────────────────────────────────────────────────
+
+- slug: modis_lai
+  name: MODIS LAI (MOD15)
+  kind: lai
+  structural_class: gridded
+  auth: earthdata
+  status: planned
+
+- slug: modis_lst
+  name: MODIS LST (MOD11)
+  kind: lst
+  structural_class: gridded
+  auth: earthdata
+  status: planned
+
+# ── Precip-as-obs ─────────────────────────────────────────────────────────
+
+- slug: chirps
+  name: CHIRPS precipitation (as obs)
+  kind: precipitation
+  structural_class: gridded
+  auth: none
+  status: planned
+
+- slug: gpm
+  name: GPM IMERG precipitation (as obs)
+  kind: precipitation
+  structural_class: gridded
+  auth: earthdata
+  status: planned
+
+- slug: mswep
+  name: MSWEP precipitation (as obs)
+  kind: precipitation
+  structural_class: gridded
+  auth: manual
+  status: research
+
+# ── Surface water / water level ───────────────────────────────────────────
+
+- slug: jrc_water
+  name: JRC Global Surface Water
+  kind: surface_water
+  structural_class: gridded
+  auth: none
+  status: planned
+
+- slug: hubeau_waterlevel
+  name: Hub'Eau hydrometrie water level
+  kind: water_level
+  structural_class: point_network
+  auth: none
+  status: planned

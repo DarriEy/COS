@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "COS: Community Observation Service"
+type: software
+authors:
+  - family-names: Eythorsson
+    given-names: Darri
+    email: dae5@hi.is
+    orcid: "https://orcid.org/0000-0003-3653-3936"
+    affiliation: "University of Calgary"
+repository-code: "https://github.com/DarriEy/COS"
+license: GPL-3.0-or-later
+version: 0.1.0
+date-released: 2026-06-13
+keywords:
+  - hydrology
+  - observations
+  - remote-sensing
+  - evapotranspiration
+  - snow-water-equivalent
+  - total-water-storage
+  - soil-moisture
+  - model-evaluation
+  - open-data
+  - time-series
+abstract: >-
+  COS is the community service for non-streamflow hydrological observations
+  (total water storage, snow water equivalent, snow cover, evapotranspiration,
+  soil moisture, groundwater, LAI, LST, precipitation-as-observation, surface
+  water, water level). It acquires from heterogeneous upstreams — gridded
+  remote-sensing products that are spatially reduced to the evaluation geometry,
+  and point networks / flux towers selected by domain — and harmonizes them into
+  a single canonical per-site time-series contract (one variable kind, one SI
+  unit, UTC) for hydrological model evaluation and calibration. COS exposes this
+  through SYMFLUENCE's versioned ObservationBackend protocol and is the
+  non-streamflow sibling of CSFS.
