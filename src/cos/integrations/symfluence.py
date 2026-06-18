@@ -153,22 +153,23 @@ class ObservationCapabilitySpec(NamedTuple):
     notes: str
 
 
-#: Every connector carries a real parity grade -> the SYMFLUENCE gate admits all
-#: 30 WITHOUT ALLOW_UNGATED_BACKENDS. Two validation tiers, honestly labeled:
-#:  * LIVE (25): validated against native on REAL downloaded data — grace/snotel
-#:    + the live spot-check campaign (USGS/IGRAC/SEDOO/Zenodo/NSIDC/USGS-EROS/
-#:    ORNL/UCSB/JRC + Earthdata GES-DISC/MODIS/SMAP via netrc) + the CDS/AmeriFlux
-#:    set using the creds we hold (esa_cci/ascat/smos via ~/.cdsapirc, fluxnet via
-#:    AmeriFlux). Grade strings carry the measured parity.
-#:  * PARITY-BY-CONSTRUCTION (5): a per-connector test runs COS's reducer and a
-#:    faithful inline reimplementation of the native reduction on the SAME
-#:    synthetic fixture, asserting equivalence within a documented tolerance
-#:    (cos-lat area-weighted basin-mean vs native unweighted mean; exact for unit
-#:    factors / constant fields / point networks). These are gleam_et / mswep_precip
-#:    / openet / ismn_sm (registration-gated — no creds here AND no public endpoint
-#:    in the native handler either) + norswe_swe (single 2.38 GB Zenodo ZIP, no
-#:    subset). cmc_swe is now LIVE (native-resolution reproject fixed the +30%
-#:    undersampling bias). No connector is ungated.
+#: Every connector (36) carries a real parity grade -> the SYMFLUENCE gate admits
+#: all of them WITHOUT ALLOW_UNGATED_BACKENDS. Validation tiers, honestly labeled
+#: in each grade string:
+#:  * LIVE (25): native-parity verified on REAL downloaded data (grace/snotel +
+#:    the live spot-check campaign + the CDS/AmeriFlux set via the creds we hold).
+#:  * LIVE-spec (3): real data fetched + output validated against the published
+#:    product spec, but NO SYMFLUENCE native to cross-check (swot_wse via the
+#:    anonymous Hydrocron API, modis_albedo, modis_gpp).
+#:  * PARITY-BY-CONSTRUCTION / spec-validated (8): a per-connector test mirrors
+#:    the native reduction (or the product spec, for no-native kinds) on a
+#:    synthetic fixture within a documented tolerance, but no live run yet:
+#:    gleam_et/mswep_precip/openet/ismn_sm (registration-gated — no creds and no
+#:    public endpoint in the native handler either), norswe_swe (2.38 GB no-subset
+#:    Zenodo ZIP), modis_ndvi (NASA CMR granule-search transiently down),
+#:    hubeau_waterlevel (Hub'Eau is geo-fenced to French IPs), cmc_snow_depth
+#:    (reuses the validated cmc_swe reader; live native-parity is pixel-subset-
+#:    sensitive on the coarse 24 km grid). No connector is ungated.
 _VALIDATED_PARITY: dict[str, str] = {
     "grace": "value-identical:correlation~1.0 (cm->mm; SYMFLUENCE live parity r=1.0000)",
     "snotel": "value-identical (inch->mm x25.4; SYMFLUENCE live parity r=1.000000, 0 mm)",
@@ -200,6 +201,12 @@ _VALIDATED_PARITY: dict[str, str] = {
     "daymet_precip": "LIVE: point bit-exact + basin rel<1e-2 vs native, real ORNL Daymet; test_daymet_precip.py",
     "jrc_surface_water": "LIVE: rel 5e-4 vs native on real JRC GSW GeoTIFF; test_jrc_surface_water.py",
     "chirps_precip": "LIVE: rel 5.9e-4 vs native on real UCSB CHIRPS v2.0 monthly; test_chirps_precip.py",
+    "swot_wse": "LIVE-spec: real SWOT WSE via Hydrocron (anon, 385-515 m, fill masked); no native; test_swot_wse.py",
+    "modis_albedo": "LIVE-spec: real MCD43A3 albedo (0..0.7, scale 0.001, fill masked); test_modis_albedo.py",
+    "modis_gpp": "LIVE-spec: real MOD17A2H GPP (~0.04% vs spec recompute); test_modis_gpp.py",
+    "modis_ndvi": "spec-validated: MOD13 scale/range/fill + reduction tested; live pending CMR; test_modis_ndvi.py",
+    "hubeau_waterlevel": "parity-by-construction vs native (mm->m); live = FR-IP only; test_hubeau_waterlevel.py",
+    "cmc_snow_depth": "parity-by-construction (reuses validated cmc_swe reader, emits depth m); test_cmc_snow_depth.py",
 }
 
 #: Curated provider notes; connectors not listed get a generic note derived from
