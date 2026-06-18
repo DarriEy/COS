@@ -17,6 +17,7 @@ from cos.connectors.ecostress_lst import (
     SOURCE_LST_SCALE,
     VALID_LST_RANGE,
     ECOSTRESSLSTConnector,
+    _geo_grid_from_struct_metadata,
 )
 from cos.core.models import KIND_UNITS, ObservationKind, ReductionSpec, SpatialReduction
 
@@ -293,6 +294,89 @@ async def test_fetch_series_without_path_errors():
         await conn.fetch_series(
             spec, datetime(2021, 1, 1, tzinfo=UTC), datetime(2022, 1, 1, tzinfo=UTC),
         )
+
+
+# --- gridded HDF-EOS5 (ECO_L2G_LSTE v002) path ----------------------------------
+
+# StructMetadata corner bounds (HE5_GCTP_GEO microdegrees, (lon, lat)) for a small
+# arid bbox: upper-left (-114.0, 36.0), lower-right (-112.0, 34.0). A 2x2 grid puts
+# cell centres at lon {-113.5, -112.5}, lat {35.5, 34.5}.
+_SM_UL = (-114.0e6, 36.0e6)
+_SM_LR = (-112.0e6, 34.0e6)
+_STRUCT_METADATA = (
+    "GROUP=GridStructure\n"
+    "\tGROUP=GRID_1\n"
+    '\t\tGridName="ECO_L2G_LSTE_70m"\n'
+    "\t\tXDim=2\n"
+    "\t\tYDim=2\n"
+    f"\t\tUpperLeftPointMtrs=({_SM_UL[0]:.6f},{_SM_UL[1]:.6f})\n"
+    f"\t\tLowerRightMtrs=({_SM_LR[0]:.6f},{_SM_LR[1]:.6f})\n"
+    "\t\tProjection=HE5_GCTP_GEO\n"
+    "\tEND_GROUP=GRID_1\n"
+    "END_GROUP=GridStructure\n"
+)
+
+
+def test_geo_grid_from_struct_metadata_centres():
+    """Corner bounds + grid shape reconstruct descending-lat cell-centre vectors."""
+    lats, lons = _geo_grid_from_struct_metadata(_STRUCT_METADATA, (2, 2))
+    np.testing.assert_allclose(lons, [-113.5, -112.5])
+    np.testing.assert_allclose(lats, [35.5, 34.5])  # lat descends from the upper-left
+
+
+@pytest.fixture
+def lst_hdfeos_grid(tmp_path):
+    """A synthetic ECO_L2G_LSTE-like HDF-EOS5 file: nested GRID LST + StructMetadata.
+
+    LST is already Kelvin (no DN scaling); geolocation must be rebuilt from the
+    StructMetadata corner bounds, and the top-level dataset has no data variables.
+    """
+    h5py = pytest.importorskip("h5py")
+    warm = 300.0  # plausible arid land-surface temperature, Kelvin
+    lst = np.full((2, 2), warm, dtype="float32")
+    lst[0, 0] = np.nan  # NaN fill cell -> masked out of the mean
+    path = tmp_path / "ECO_L2G_LSTE_synth.h5"
+    with h5py.File(path, "w") as h5:
+        grp = h5.create_group("HDFEOS/GRIDS/ECO_L2G_LSTE_70m/Data Fields")
+        dset = grp.create_dataset("LST", data=lst)
+        dset.attrs["scale_factor"] = 1.0
+        dset.attrs["units"] = b"K"
+        h5.create_dataset("HDFEOS INFORMATION/StructMetadata.0", data=_STRUCT_METADATA)
+        md = "HDFEOS/ADDITIONAL/FILE_ATTRIBUTES/StandardMetadata/"
+        h5.create_dataset(md + "RangeBeginningDate", data=b"2023-07-02")
+        h5.create_dataset(md + "RangeBeginningTime", data=b"08:07:36.953583")
+    return path, warm
+
+
+def test_reduce_file_hdfeos_grid_geolocates_and_reduces(lst_hdfeos_grid):
+    """Gridded HDF-EOS5: rebuilt geolocation + native-Kelvin scale reduce to 'K'.
+
+    Reproduces the live ECO_L2G_LSTE path: top-level data_vars are empty, so the
+    connector opens the nested GRID group, reads native-float Kelvin LST, and
+    rebuilds lat/lon from StructMetadata — no DN*0.02 scaling.
+    """
+    path, warm = lst_hdfeos_grid
+    conn = ECOSTRESSLSTConnector()
+    spec = ReductionSpec(
+        domain_name="az_sw", bbox=(34.0, -114.0, 36.0, -112.0),
+        centroid=(35.0, -113.0), area_km2=8000.0,
+    )
+    series = conn.reduce_file(
+        path, spec,
+        datetime(2023, 1, 1, tzinfo=UTC), datetime(2024, 1, 1, tzinfo=UTC),
+    )
+    assert series.unit == "K"
+    assert series.reduction == SpatialReduction.BASIN_MEAN
+    assert len(series.points) == 1  # one acquisition instant
+    p = series.points[0]
+    assert p.value == pytest.approx(warm, abs=1e-4)  # native Kelvin, NaN cell excluded
+    assert p.quality.value == "good"
+    assert p.timestamp.year == 2023 and p.timestamp.month == 7
+    # The gridded path reports its own provenance, not the flat ECO2LSTE.001's.
+    assert series.source_info["product"] == "ECO_L2G_LSTE.002"
+    assert series.source_info["scale_k_per_count"] == "1"  # native Kelvin, no DN scaling
+    assert "LST" in series.source_info["variable"]
+    assert series.source_info["scale_k_per_count"] == "1"
 
 
 @pytest.mark.network

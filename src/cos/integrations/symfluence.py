@@ -166,12 +166,14 @@ class ObservationCapabilitySpec(NamedTuple):
 
 #: Every connector (50) carries a real parity grade -> the SYMFLUENCE gate admits
 #: all of them WITHOUT ALLOW_UNGATED_BACKENDS (subject to the license-posture gate
-#: below: ``restricted`` sources are refused regardless of grade). 41 of 50 are
-#: validated on REAL data; of the 7 frontier connectors, 6 are now live-validated
-#: (csr_grace/gsfc_grace LIVE; goes_lst/ecostress_et/oco3_sif/swot_lake_storage
-#: LIVE-spec) and only ecostress_lst stays spec-validated (its live LP DAAC
-#: products need new HDF-EOS-GRID / COG / swath ingest). Validation tiers, honestly
-#: labeled in each grade string:
+#: below: ``restricted`` sources are refused regardless of grade). 44 of 50 are
+#: validated on REAL data; all 7 frontier connectors are now live-validated
+#: (csr_grace/gsfc_grace LIVE; goes_lst/ecostress_et/ecostress_lst/oco3_sif/
+#: swot_lake_storage LIVE-spec — ecostress_lst via a wired ECO_L2G_LSTE HDF-EOS5
+#: GRID reader). The 6 still off real data are credential/endpoint-gated:
+#: ismn_sm/mswep_precip/openet (registration/API key), sentinel1_sm (CDSE OAuth2),
+#: hubeau_waterlevel (hydrometrie API geo-403), norswe_swe (2.4 GB unsplittable
+#: Zenodo ZIP). Validation tiers, honestly labeled in each grade string:
 #:  * LIVE (26): native-parity verified on REAL downloaded data (grace/snotel +
 #:    the live spot-check campaign + the CDS/AmeriFlux set via the creds we hold
 #:    + modis_fapar exact vs mcd15).
@@ -201,7 +203,7 @@ _VALIDATED_PARITY: dict[str, str] = {
     "openet": "value-identical vs native (point/unit-exact); test_openet.py",
     "mod16_et": "LIVE: COS~native within tol on real MOD16 granule; test_mod16_et.py",
     "fluxnet_et": "LIVE: corr=1.0, d~4e-16 vs native on real AmeriFlux US-Ne1; test_fluxnet_et.py",
-    "gleam_et": "value-within:1e-3 vs native cos-lat basin-mean; test_gleam_et.py",
+    "gleam_et": "LIVE: real GLEAM v3.0a E (4TU OPeNDAP, no login), SE-US 2010 mm/day; test_gleam_et.py",
     "ssebop_et": "LIVE: rel 4e-5 vs native on real USGS/EROS CONUS granule; test_ssebop_et.py",
     "smap_sm": "LIVE: max|delta| small vs native on real SMAP granule (m3/m3); test_smap_sm.py",
     "smos_sm": "LIVE: max|d|2.4e-3 m3/m3 vs native on real CDS SMOS SM; test_smos_sm.py",
@@ -222,7 +224,7 @@ _VALIDATED_PARITY: dict[str, str] = {
     "modis_gpp": "LIVE-spec: real MOD17A2H GPP (~0.04% vs spec recompute); test_modis_gpp.py",
     "modis_ndvi": "LIVE-spec: real MOD13A2 NDVI (0.81, scale 0.0001, fill masked); test_modis_ndvi.py",
     "hubeau_waterlevel": "parity-by-construction vs native (mm->m); live = FR-IP only; test_hubeau_waterlevel.py",
-    "cmc_snow_depth": "parity-by-construction (reuses validated cmc_swe reader, emits depth m); test_cmc_snow_depth.py",
+    "cmc_snow_depth": "LIVE: real NSIDC-0447 CMC snow depth, boreal SK 0.51 m, cm->m exact; test_cmc_snow_depth.py",
     "swot_lake_area": "LIVE-spec: real SWOT lake via Hydrocron (anon, 32 pts 0.4-0.63 km2); test_swot_lake_area.py",
     "sentinel1_sm": "parity-by-construction vs native (m3/m3); live needs CDSE OAuth2 creds; test_sentinel1_sm.py",
     "amsr_swe": "LIVE-spec: real AMSR2 AU_DySno (NH scale fixed, 2-D EASE grid); test_amsr_swe.py",
@@ -233,7 +235,7 @@ _VALIDATED_PARITY: dict[str, str] = {
     # Frontier (next-frontier build) — spec-validated / parity-by-construction;
     # live runs pending (anon for goes/swot; Earthdata for ecostress/oco3/gsfc).
     "goes_lst": "LIVE-spec: real GOES-16 ABI L2 LSTC (fixed-grid x/y->lat/lon, DQF-masked, K); test_goes_lst.py",
-    "ecostress_lst": "spec-validated: ECOSTRESS L2 LST; LIVE-blocked, needs new ingest; test_ecostress_lst.py",
+    "ecostress_lst": "LIVE-spec: real ECO_L2G_LSTE v002 (StructMetadata geoloc, native-K) 299 K; test_ecostress_lst.py",
     "ecostress_et": "LIVE-spec: real ECOSTRESS L3T JET ETdaily 1.46 mm/day; y/x transpose fixed; test_ecostress_et.py",
     "oco3_sif": "LIVE-spec: real OCO-3 Lite SIF_740nm (sounding_dim, -9e30 fill) -> 1.94 mW/m2/nm/sr; test_oco3_sif.py",
     "swot_lake_storage": "LIVE-spec: real SWOT LakeSP storage (Hydrocron anon, ds1_l km3); test_swot_lake_storage.py",
