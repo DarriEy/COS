@@ -170,6 +170,12 @@ class GGMNGroundwaterConnector(BaseObservationConnector):
             except ValueError:
                 points.append(ObservationPoint(timestamp=ts, value=None, quality=QualityFlag.MISSING))
                 continue
+            # Non-finite tokens ("NaN"/"inf") parse via float() but native coerces
+            # them with pd.to_numeric + dropna, i.e. they are NOT valid levels.
+            # Emit MISSING so a NaN never masquerades as a GOOD groundwater level.
+            if value_m != value_m or value_m in (float("inf"), float("-inf")):
+                points.append(ObservationPoint(timestamp=ts, value=None, quality=QualityFlag.MISSING))
+                continue
             points.append(ObservationPoint(timestamp=ts, value=value_m, quality=QualityFlag.GOOD))
         points.sort(key=lambda p: p.timestamp)
         return points

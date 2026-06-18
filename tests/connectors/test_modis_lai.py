@@ -171,3 +171,190 @@ async def test_fetch_series_without_ncpath_errors():
 async def test_live_earthdata_fetch_placeholder():
     """Live Earthdata fetch is not wired (parity is the reduce path); skip."""
     pytest.skip("MODIS LAI live Earthdata download is not wired in this connector")
+
+
+# --------------------------------------------------------------------------
+# PARITY-BY-CONSTRUCTION
+#
+# The native SYMFLUENCE handler
+# (src/symfluence/data/observation/handlers/modis_lai.py) reduces a MODIS
+# LAI grid to a basin-mean LAI series as follows, in MODISLAIHandler:
+#
+#   1. valid-range mask: da.where((da >= 0) & (da <= 100))          -> NaN
+#      (masks the 255 fill byte and every out-of-range DN);
+#   2. QC algorithm-path filter, _apply_qc_filter:
+#        algorithm_bits = (qc >> 5) & 0b111; keep where bits in {0, 2};
+#   3. bbox subset via inclusive da.sel(lat=slice, lon=slice);
+#   4. *** UNWEIGHTED *** spatial mean: float(da.mean(skipna=True)) over
+#      all (lat, lon) cells -- NO cosine-latitude weighting;
+#   5. scale: mean_val * LAI_SCALE_FACTOR (0.1) -> LAI in m^2/m^2;
+#   6. an all-NaN layer -> None (the canonical MISSING).
+#
+# COS's reduce.basin_mean instead takes a COS-LATITUDE AREA-WEIGHTED mean
+# (reduce.py docstring: a documented, tolerance-based approximation of
+# polygon-weighted zonal stats). That is the ONLY semantic divergence; it is
+# benign for the LAI objective and vanishes for constant-within-layer fields
+# (the weights factor out). The tests below pin BOTH facts: exact agreement on
+# constant fields, and a bounded (small) divergence on a latitude-varying field.
+#
+# These tests reimplement the native semantics inline on the SAME synthetic
+# input and compare against the COS connector's pure reduce_file helper.
+# --------------------------------------------------------------------------
+
+# Match the synthetic grid / bbox used by the fixtures above so the inline
+# native reimplementation and the COS connector see exactly the same cells.
+_LATS = np.array([50.0, 51.0, 52.0])
+_LONS = np.array([244.0, 245.0, 246.0])  # 0-360 (= -116..-114)
+_BBOX = (50.0, -116.0, 52.0, -114.0)
+
+
+def _native_basin_mean_lai(dn_layer):
+    """Reimplement the native MODISLAIHandler reduction on one DN layer.
+
+    Mirrors _extract_basin_mean + the 0.1 scale exactly: valid-range mask,
+    inclusive bbox (the whole synthetic grid lies in the bbox), then an
+    UNWEIGHTED skipna mean, scaled by LAI_SCALE_FACTOR (0.1). Returns None for
+    an all-invalid layer (the native None -> canonical MISSING).
+    """
+    lo, hi = 0.0, 100.0  # native LAI_VALID_RANGE
+    arr = np.asarray(dn_layer, dtype="float64")
+    arr = np.where((arr >= lo) & (arr <= hi), arr, np.nan)
+    if not np.isfinite(arr).any():
+        return None
+    mean_dn = float(np.nanmean(arr))  # native da.mean(skipna=True), UNWEIGHTED
+    return mean_dn * 0.1  # native LAI_SCALE_FACTOR
+
+
+def _cos_value_for(series, day):
+    by_day = {p.timestamp.day: p for p in series.points}
+    return by_day[day].value
+
+
+def _make_lai_nc(tmp_path, layers, times):
+    """Write a synthetic Lai_500m NetCDF from a list of (3x3) DN layers."""
+    xr = pytest.importorskip("xarray")
+    pytest.importorskip("netCDF4")
+    data = np.stack([np.asarray(layer, dtype="float64") for layer in layers])
+    ds = xr.Dataset(
+        {"Lai_500m": (("time", "lat", "lon"), data)},
+        coords={"time": np.asarray(times, dtype="datetime64[ns]"),
+                "lat": _LATS, "lon": _LONS},
+    )
+    path = tmp_path / "modis_lai_parity.nc"
+    ds.to_netcdf(path)
+    return path
+
+
+def test_parity_constant_field_exact(tmp_path):
+    """On constant-within-layer fields COS == native to float tolerance.
+
+    cos-lat weighting and the native unweighted mean are identical when every
+    in-box cell holds the same value (the weights factor out). This is the
+    strongest parity statement: a bitwise-tight agreement that also pins the
+    unit factor (DN * 0.1) and the fill-byte -> MISSING rule.
+    """
+    layers = [
+        np.full((3, 3), 30.0),                 # DN 30 -> LAI 3.0
+        np.full((3, 3), 50.0),                 # DN 50 -> LAI 5.0
+        np.full((3, 3), float(LAI_FILL_VALUE)),  # all fill -> native None / MISSING
+    ]
+    times = ["2020-06-09", "2020-06-17", "2020-06-25"]
+    path = _make_lai_nc(tmp_path, layers, times)
+
+    conn = MODISLAIConnector()
+    series = conn.reduce_file(
+        path, _spec(8000.0),  # large -> basin_mean
+        datetime(2020, 6, 1, tzinfo=UTC), datetime(2020, 8, 1, tzinfo=UTC),
+    )
+    assert series.unit == "1"
+
+    # DN 30 / DN 50 layers: COS basin-mean must equal the native unweighted
+    # mean * 0.1 exactly.
+    assert _cos_value_for(series, 9) == pytest.approx(_native_basin_mean_lai(layers[0]), abs=1e-12)
+    assert _cos_value_for(series, 17) == pytest.approx(_native_basin_mean_lai(layers[1]), abs=1e-12)
+
+    # All-fill layer: native returns None; COS surfaces MISSING with no value.
+    assert _native_basin_mean_lai(layers[2]) is None
+    by_day = {p.timestamp.day: p for p in series.points}
+    assert by_day[25].value is None
+    assert by_day[25].quality == QualityFlag.MISSING
+
+
+def test_parity_out_of_range_fill_rule(tmp_path):
+    """The valid-range mask matches native: out-of-range DN dropped, not clipped.
+
+    Native masks DN>100 (and the 255 fill) to NaN before meaning. A layer of
+    DN 50 with one DN 200 cell must reduce, in BOTH paths, to the mean of the
+    surviving DN-50 cells (= LAI 5.0), never a value pulled up by the 200.
+    """
+    layer = np.full((3, 3), 50.0)
+    layer[0, 0] = 200.0  # out of range -> masked
+    path = _make_lai_nc(tmp_path, [layer], ["2020-06-09"])
+
+    conn = MODISLAIConnector()
+    series = conn.reduce_file(
+        path, _spec(8000.0),
+        datetime(2020, 6, 1, tzinfo=UTC), datetime(2020, 8, 1, tzinfo=UTC),
+    )
+    native = _native_basin_mean_lai(layer)
+    assert native == pytest.approx(5.0, abs=1e-12)
+    # Surviving cells are all DN 50 (constant) so cos-lat == unweighted exactly.
+    assert series.points[0].value == pytest.approx(native, abs=1e-12)
+
+
+def test_parity_latitude_varying_divergence_is_bounded(tmp_path):
+    """On a latitude-varying field COS (cos-lat) diverges from native, bounded.
+
+    This is the documented, benign divergence: COS area-weights by cos(lat),
+    native takes a plain unweighted mean. Over the synthetic 50-52 deg bbox the
+    relative gap is < 1e-2 (here ~7e-3), well within the LAI objective's
+    tolerance and far below the magnitude of any real phenology signal. The
+    test pins the divergence so a regression to (e.g.) the wrong reduction or a
+    silent unit change would break it.
+    """
+    # Field varies only by latitude row so weighting is what differs.
+    layer = np.empty((3, 3))
+    layer[0, :] = 20.0   # lat 50 -> DN 20
+    layer[1, :] = 40.0   # lat 51 -> DN 40
+    layer[2, :] = 60.0   # lat 52 -> DN 60
+    path = _make_lai_nc(tmp_path, [layer], ["2020-06-09"])
+
+    conn = MODISLAIConnector()
+    series = conn.reduce_file(
+        path, _spec(8000.0),
+        datetime(2020, 6, 1, tzinfo=UTC), datetime(2020, 8, 1, tzinfo=UTC),
+    )
+    cos_val = series.points[0].value
+
+    native_val = _native_basin_mean_lai(layer)  # unweighted: (20+40+60)/3 * 0.1 = 4.0
+    assert native_val == pytest.approx(4.0, abs=1e-12)
+
+    # Reproduce the COS cos-lat reduction inline to confirm it is exactly what
+    # the connector applies (and to bound the divergence from native).
+    w = np.cos(np.deg2rad(_LATS))
+    rows = np.array([2.0, 4.0, 6.0])  # per-lat-row scaled LAI (DN*0.1)
+    cos_lat_expected = float(np.sum(rows * w) / np.sum(w))
+    assert cos_val == pytest.approx(cos_lat_expected, abs=1e-9)
+
+    rel = abs(cos_val - native_val) / native_val
+    assert rel < 1e-2, f"cos-lat vs native divergence {rel:.4f} exceeds bound"
+
+
+def test_parity_window_trim_half_open(tmp_path):
+    """Half-open [start, end) UTC trim matches the native experiment-period slice.
+
+    Native trims with df.loc[start:end]; COS uses start <= ts < end. The
+    half-open boundary is the canonical contract, exercised here on the parity
+    fixture: a timestamp exactly at end is excluded.
+    """
+    layers = [np.full((3, 3), 30.0), np.full((3, 3), 50.0), np.full((3, 3), 20.0)]
+    times = ["2020-06-09", "2020-06-17", "2020-06-25"]
+    path = _make_lai_nc(tmp_path, layers, times)
+
+    conn = MODISLAIConnector()
+    series = conn.reduce_file(
+        path, _spec(8000.0),
+        datetime(2020, 6, 9, tzinfo=UTC), datetime(2020, 6, 25, tzinfo=UTC),
+    )
+    days = {p.timestamp.day for p in series.points}
+    assert days == {9, 17}  # 06-25 == end is excluded (half-open)

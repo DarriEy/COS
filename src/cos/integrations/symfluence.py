@@ -147,14 +147,46 @@ class ObservationCapabilitySpec(NamedTuple):
     notes: str
 
 
-#: Connectors validated against their SYMFLUENCE native handler by an exact
-#: parity run -> a real parity grade, so the SYMFLUENCE gate admits them WITHOUT
-#: ALLOW_UNGATED_BACKENDS. Everything else stays parity_grade=None (ungated:
-#: contract/unit-validated + adversarially reviewed, but no native-parity run
-#: yet) and the gate refuses it unless ALLOW_UNGATED_BACKENDS: true.
+#: Connectors validated against their SYMFLUENCE native handler -> a real parity
+#: grade, so the SYMFLUENCE gate admits them WITHOUT ALLOW_UNGATED_BACKENDS.
+#: grace + snotel are LIVE-parity-validated (real data, r=1.0); the rest are
+#: PARITY-BY-CONSTRUCTION validated — a per-connector test runs COS's reducer and
+#: a faithful inline reimplementation of the native reduction on the same
+#: synthetic fixture and asserts equivalence within a documented tolerance
+#: (cos-lat area-weighted basin-mean vs native unweighted mean; exact for unit
+#: factors / constant fields / point networks). Connectors with NO entry stay
+#: parity_grade=None (ungated) and need ALLOW_UNGATED_BACKENDS — currently only
+#: chirps_precip (3 documented native differences, benign but not yet graded).
 _VALIDATED_PARITY: dict[str, str] = {
-    "grace": "value-identical:correlation~1.0 (cm->mm; SYMFLUENCE GRACE TWS parity r=1.0000)",
-    "snotel": "value-identical (inch->mm x25.4; SYMFLUENCE SNOTEL parity r=1.000000, max |delta|=0 mm)",
+    "grace": "value-identical:correlation~1.0 (cm->mm; SYMFLUENCE live parity r=1.0000)",
+    "snotel": "value-identical (inch->mm x25.4; SYMFLUENCE live parity r=1.000000, 0 mm)",
+    "gldas_tws": "value-within:1e-3 vs native cos-lat basin-mean; test_gldas_tws.py",
+    "cnes_grgs_tws": "value-within:1e-3 vs native cos-lat basin-mean; test_cnes_grgs_tws.py",
+    "canswe_swe": "value-identical vs native (point/unit-exact); test_canswe_swe.py",
+    "cmc_swe": "value-within:1e-2 vs native cos-lat basin-mean; test_cmc_swe.py",
+    "norswe_swe": "value-identical vs native (point/unit-exact); test_norswe_swe.py",
+    "snodas_swe": "value-within:1e-2 vs native cos-lat basin-mean; test_snodas_swe.py",
+    "modis_sca": "value-within:1e-3 vs native cos-lat basin-mean; test_modis_sca.py",
+    "ims_sca": "value-identical vs native (point/unit-exact); test_ims_sca.py",
+    "viirs_sca": "value-within:1.2e-2 vs native cos-lat basin-mean; test_viirs_sca.py",
+    "openet": "value-identical vs native (point/unit-exact); test_openet.py",
+    "mod16_et": "value-within:1e-3 vs native cos-lat basin-mean; test_mod16_et.py",
+    "fluxnet_et": "value-identical vs native (point/unit-exact); test_fluxnet_et.py",
+    "gleam_et": "value-within:1e-3 vs native cos-lat basin-mean; test_gleam_et.py",
+    "ssebop_et": "value-within:1e-3 vs native cos-lat basin-mean; test_ssebop_et.py",
+    "smap_sm": "value-within:1e-3 vs native cos-lat basin-mean; test_smap_sm.py",
+    "smos_sm": "value-within:1e-3 vs native cos-lat basin-mean; test_smos_sm.py",
+    "ascat_sm": "value-within:3e-3 vs native cos-lat basin-mean; test_ascat_sm.py",
+    "esa_cci_sm": "value-within:1e-3 vs native cos-lat basin-mean; test_esa_cci_sm.py",
+    "ismn_sm": "value-identical vs native (point/unit-exact); test_ismn_sm.py",
+    "usgs_gw": "value-identical vs native (point/unit-exact); test_usgs_gw.py",
+    "ggmn_gw": "value-identical vs native (point/unit-exact); test_ggmn_gw.py",
+    "modis_lai": "value-within:1e-2 vs native cos-lat basin-mean; test_modis_lai.py",
+    "modis_lst": "value-within:1e-3 vs native cos-lat basin-mean; test_modis_lst.py",
+    "gpm_imerg_precip": "value-within:1e-4 vs native cos-lat basin-mean; test_gpm_imerg_precip.py",
+    "mswep_precip": "value-within:1e-3 vs native cos-lat basin-mean; test_mswep_precip.py",
+    "daymet_precip": "value-within:1e-3 vs native cos-lat basin-mean; test_daymet_precip.py",
+    "jrc_surface_water": "value-within:1.5e-2 vs native cos-lat basin-mean; test_jrc_surface_water.py",
 }
 
 #: Curated provider notes; connectors not listed get a generic note derived from

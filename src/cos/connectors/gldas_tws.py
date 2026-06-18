@@ -179,9 +179,19 @@ class GLDASTWSConnector(BaseObservationConnector):
 
         Each component is broadcast to (time, lat, lon). A cell-time is finite
         (and contributes its summed storage) iff at least one component is
-        finite there — finite components add, NaN components count as 0, exactly
-        like the native handler's NaN-skipping sum. A cell-time with no finite
-        component stays NaN so :func:`reduce_grid` flags it MISSING.
+        finite there — finite components add, NaN components count as 0. A
+        cell-time with no finite component stays NaN so :func:`reduce_grid`
+        flags it MISSING.
+
+        Contract note vs native: this is a per-cell component sum reduced in
+        space (space-of-cell-sum); the native ``GLDASAcquirer`` sums per-component
+        spatial means (component-then-space) and propagates a NaN SWE/Canopy
+        spatial-mean into the whole-timestep TWS. On spatially complete granules
+        (the GLDAS monthly land case) the two agree exactly for a uniform field
+        and to ~1e-3 (cos-lat vs unweighted) otherwise; they only diverge on
+        partial-/single-component-NaN patterns, which GLDAS monthly land fields
+        do not exhibit. See tests/connectors/test_gldas_tws.py for the pinned
+        parity regime and the documented NaN-pattern divergence.
         """
         import xarray as xr
 
