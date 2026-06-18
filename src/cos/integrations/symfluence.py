@@ -207,6 +207,13 @@ _VALIDATED_PARITY: dict[str, str] = {
     "modis_ndvi": "spec-validated: MOD13 scale/range/fill + reduction tested; live pending CMR; test_modis_ndvi.py",
     "hubeau_waterlevel": "parity-by-construction vs native (mm->m); live = FR-IP only; test_hubeau_waterlevel.py",
     "cmc_snow_depth": "parity-by-construction (reuses validated cmc_swe reader, emits depth m); test_cmc_snow_depth.py",
+    "swot_lake_area": "spec-validated: SWOT lake area via Hydrocron (km2->fraction); test_swot_lake_area.py",
+    "sentinel1_sm": "parity-by-construction vs native sentinel1_sm (m3/m3); test_sentinel1_sm.py",
+    "amsr_swe": "spec-validated: AMSR2 AU_DySno SWE (DN*2->mm); test_amsr_swe.py",
+    "tropomi_sif": "spec-validated: TROPOMI SIF (mW/m2/nm/sr); test_tropomi_sif.py",
+    "modis_fapar": "parity-by-construction vs native mcd15 FAPAR (scale 0.01); test_modis_fapar.py",
+    "vodca_vod": "spec-validated: VODCA VOD unpacked (dimensionless); test_vodca_vod.py",
+    "smap_freeze_thaw": "spec-validated: SMAP SPL3FTP frozen-fraction (0..1); test_smap_freeze_thaw.py",
 }
 
 #: Curated provider notes; connectors not listed get a generic note derived from

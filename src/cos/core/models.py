@@ -59,6 +59,11 @@ class ObservationKind(StrEnum):
     ALBEDO = "albedo"                      # broadband surface albedo, dimensionless
     SNOW_DEPTH = "snow_depth"              # physical snow depth (distinct from SWE)
     GPP = "gpp"                            # gross primary productivity
+    # Frontier kinds (vegetation/carbon/cold-region constraints).
+    SIF = "sif"                            # solar-induced chlorophyll fluorescence
+    FAPAR = "fapar"                        # fraction of absorbed PAR, dimensionless
+    VOD = "vod"                            # vegetation optical depth, dimensionless
+    FREEZE_THAW = "freeze_thaw"            # surface frozen state / frozen fraction
 
 
 #: Frozen canonical SI unit per kind (design §2 unit table). The connector MUST
@@ -79,6 +84,10 @@ KIND_UNITS: dict[ObservationKind, str] = {
     ObservationKind.ALBEDO: "1",                 # albedo fraction (0..1)
     ObservationKind.SNOW_DEPTH: "m",             # physical snow depth, metres
     ObservationKind.GPP: "gC/m2/day",            # gross primary productivity
+    ObservationKind.SIF: "mW/m2/nm/sr",          # SIF radiance
+    ObservationKind.FAPAR: "1",                  # absorbed-PAR fraction (0..1)
+    ObservationKind.VOD: "1",                    # vegetation optical depth (dimensionless)
+    ObservationKind.FREEZE_THAW: "1",            # frozen-state flag / frozen fraction (0..1)
 }
 
 #: COS kind -> SYMFLUENCE ``obs_type`` (they coincide today, but the indirection

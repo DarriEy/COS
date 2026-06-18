@@ -14,6 +14,15 @@
 # registered connector; edit the connector class attrs, not this file by hand.
 # Parity: grace + snotel are native-parity-validated (r=1.0); the rest are
 # contract/unit-validated + adversarially reviewed, pending a native-parity run.
+- slug: amsr_swe
+  name: AMSR2 Daily Snow Water Equivalent (AU_DySno)
+  kind: swe
+  structural_class: gridded
+  auth: earthdata
+  status: implemented
+  canonical_unit: "mm"
+  notes: >-
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: ascat_sm
   name: EUMETSAT ASCAT Surface Soil Moisture
   kind: soil_moisture
@@ -194,6 +203,15 @@
   canonical_unit: "1"
   notes: >-
     Ported to the COS canonical contract. contract/spec validated.
+- slug: modis_fapar
+  name: NASA MODIS FAPAR (MCD15A2H)
+  kind: fapar
+  structural_class: gridded
+  auth: earthdata
+  status: implemented
+  canonical_unit: "1"
+  notes: >-
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: modis_gpp
   name: NASA MODIS MOD17A2H GPP
   kind: gpp
@@ -266,6 +284,24 @@
   canonical_unit: "mm/day"
   notes: >-
     Ported to the COS canonical contract. contract/spec validated.
+- slug: sentinel1_sm
+  name: Copernicus Sentinel-1 Surface Soil Moisture
+  kind: soil_moisture
+  structural_class: gridded
+  auth: cdse
+  status: implemented
+  canonical_unit: "m3/m3"
+  notes: >-
+    Ported to the COS canonical contract. contract/spec validated.
+- slug: smap_freeze_thaw
+  name: NASA SMAP L3 Freeze/Thaw State
+  kind: freeze_thaw
+  structural_class: gridded
+  auth: earthdata
+  status: implemented
+  canonical_unit: "1"
+  notes: >-
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: smap_sm
   name: NASA SMAP Surface Soil Moisture
   kind: soil_moisture
@@ -311,6 +347,15 @@
   canonical_unit: "mm/day"
   notes: >-
     Ported to the COS canonical contract. contract/spec validated.
+- slug: swot_lake_area
+  name: SWOT Lake Surface Area (Hydrocron)
+  kind: surface_water
+  structural_class: point_network
+  auth: none
+  status: implemented
+  canonical_unit: "fraction"
+  notes: >-
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: swot_wse
   name: SWOT Water-Surface Elevation (Hydrocron)
   kind: water_level
@@ -318,6 +363,15 @@
   auth: none
   status: implemented
   canonical_unit: "m"
+  notes: >-
+    Ported to the COS canonical contract. contract/spec validated.
+- slug: tropomi_sif
+  name: TROPOMI Solar-Induced Fluorescence (Caltech gridded)
+  kind: sif
+  structural_class: gridded
+  auth: earthdata
+  status: implemented
+  canonical_unit: "mW/m2/nm/sr"
   notes: >-
     Ported to the COS canonical contract. contract/spec validated.
 - slug: usgs_gw
@@ -336,5 +390,14 @@
   auth: earthdata
   status: implemented
   canonical_unit: "fraction"
+  notes: >-
+    Ported to the COS canonical contract. contract/spec validated.
+- slug: vodca_vod
+  name: VODCA Vegetation Optical Depth
+  kind: vod
+  structural_class: gridded
+  auth: none
+  status: implemented
+  canonical_unit: "1"
   notes: >-
     Ported to the COS canonical contract. contract/spec validated.
