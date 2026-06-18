@@ -45,13 +45,16 @@ This connector:
    weighted) for larger basins, ``nearest_cell`` for small ones — and emits the
    canonical ``sif`` unit ``mW/m2/nm/sr``.
 
-The OCO-3 Lite product stores SIF on **2-D** per-sounding ``(time, lat, lon)``
-coordinate arrays (orbit footprints, not a regular raster); :meth:`reduce_arrays`
-therefore carries a dedicated 2-D-coordinate reduction path (bbox cell-mask +
-cos-lat-weighted mean / nearest sounding) alongside the 1-D
-:func:`cos.core.reduce.reduce_grid` path, and normalizes any ``(lat, lon, time)``
-dim order to ``(time, lat, lon)`` before reducing (mirroring the fixes already in
-:mod:`cos.connectors.tropomi_sif` / :mod:`cos.connectors.amsr_swe`).
+The real OCO-3 Lite product stores SIF on a **1-D ``sounding_dim``** (orbit
+footprints, not a regular raster), with ``Latitude``/``Longitude`` as *data_vars*
+(no xarray coords, no ``time`` variable) and a ≈ -9e30 ``missing_value`` fill.
+:meth:`reduce_file` detects that layout and takes :meth:`_reduce_sounding_file`,
+which reshapes the soundings onto the dedicated 2-D-coordinate reduction path
+(bbox cell-mask + cos-lat-weighted mean / nearest sounding). A pre-gridded file
+with explicit 1-D/2-D ``lat``/``lon`` and the 757/771 nm windows is also supported
+via the 1-D :func:`cos.core.reduce.reduce_grid` path (any ``(lat, lon, time)`` dim
+order is normalized to ``(time, lat, lon)``), mirroring
+:mod:`cos.connectors.tropomi_sif` / :mod:`cos.connectors.amsr_swe`.
 
 The architecture-critical extract→mask→combine→scale→reduce→canonicalize path is
 hermetically tested via :meth:`OCO3SIFConnector.reduce_arrays` on a synthetic
@@ -104,8 +107,18 @@ SIF_COMBINE_SCALE = 0.5
 #: Candidate per-window SIF variable names, in preference order (OCO3_L2_Lite_SIF).
 SIF_757_VARIABLES = ("SIF_757nm", "sif_757nm", "SIF_757", "Daily_SIF_757nm")
 SIF_771_VARIABLES = ("SIF_771nm", "sif_771nm", "SIF_771", "Daily_SIF_771nm")
-#: Candidate already-combined / single-field SIF names, in preference order.
+#: Candidate already-combined / single-field SIF names, in preference order. The
+#: real OCO3_L2_Lite_SIF granule carries a combined ``SIF_740nm`` field; it is
+#: preferred over re-combining the daily-corrected ``Daily_SIF_757/771nm`` windows.
 SIF_SINGLE_VARIABLES = ("SIF_740nm", "sif_740nm", "SIF_740", "sif", "SIF")
+#: Per-sounding coordinate variable names (the real Lite product stores these as
+#: *data_vars*, capitalized ``Latitude``/``Longitude`` on a 1-D ``sounding_dim``,
+#: with no xarray coords and no ``time`` variable).
+SIF_LAT_VARIABLES = ("lat", "Latitude", "latitude")
+SIF_LON_VARIABLES = ("lon", "Longitude", "longitude")
+#: Real OCO-3 Lite fill sentinel, carried on the SIF variable's ``missing_value``
+#: attr (≈ -9e30) — distinct from the gridded path's -999999 :data:`SIF_FILL_VALUE`.
+SIF_FILL_MAGNITUDE = 1.0e29
 #: <= this area (km²) defaults to nearest_cell; larger uses basin_mean.
 MEDIUM_BASIN_THRESHOLD_KM2 = 1000.0
 
@@ -155,6 +168,21 @@ class OCO3SIFConnector(BaseObservationConnector):
 
         combine = bool(spec.options.get("sif_combine", True))
         with xr.open_dataset(path, mask_and_scale=False) as ds:
+            # Real OCO3_L2_Lite_SIF is 1-D per-sounding: Latitude/Longitude are
+            # *data_vars* on a sounding_dim, with no xarray coords and no `time`.
+            # Detect that layout and take the dedicated per-sounding reader (uses
+            # the combined SIF_740nm, not a re-combine of the daily windows);
+            # otherwise fall back to the gridded (time, lat, lon) reader.
+            slat = _first_var(ds, SIF_LAT_VARIABLES)
+            slon = _first_var(ds, SIF_LON_VARIABLES)
+            if (
+                slat is not None
+                and slon is not None
+                and ds[slat].ndim == 1
+                and "sounding_dim" in tuple(str(d) for d in ds[slat].dims)
+            ):
+                return self._reduce_sounding_file(ds, slat, slon, spec, start, end)
+
             lat_name = "lat" if "lat" in ds else _coord_like(ds, "lat")
             lon_name = "lon" if "lon" in ds else _coord_like(ds, "lon")
             time_name = "time" if "time" in ds else _coord_like(ds, "time")
@@ -187,6 +215,50 @@ class OCO3SIFConnector(BaseObservationConnector):
             times = np.asarray(ds[time_name].values)
         return self.reduce_arrays(
             lats, lons, times, values, spec, start, end, var_name=var_name, already_combined=True
+        )
+
+    def _reduce_sounding_file(
+        self,
+        ds: object,
+        lat_name: str,
+        lon_name: str,
+        spec: ReductionSpec,
+        start: datetime,
+        end: datetime,
+    ) -> ObservationSeries:
+        """Read the real 1-D per-sounding OCO3_L2_Lite_SIF layout.
+
+        The published product ships a single combined ``SIF_740nm`` field (do NOT
+        re-combine the daily-corrected windows), with ``Latitude``/``Longitude`` as
+        1-D ``(sounding_dim,)`` data_vars and a ``missing_value`` fill of ≈ -9e30.
+        Soundings are reshaped onto the 2-D reduction path (one synthetic time row,
+        ``(1, n)`` coords) so the bbox cell-mask selects the in-domain footprints.
+        """
+        import numpy as np
+
+        vsingle = _first_var(ds, SIF_SINGLE_VARIABLES, in_data_vars=True)
+        if vsingle is None:
+            raise ConnectorError(
+                self.slug,
+                f"OCO-3 Lite NetCDF missing a combined SIF field {SIF_SINGLE_VARIABLES}",
+            )
+        da = ds[vsingle]  # type: ignore[index]
+        values = np.asarray(da.values, dtype="float64")
+        # Honour the product fill (missing_value / _FillValue attr; ≈ -9e30, not the
+        # -999999 the gridded path expects), then a magnitude guard for robustness.
+        for attr in ("missing_value", "_FillValue"):
+            fv = da.attrs.get(attr)
+            if fv is not None:
+                values = np.where(values == float(fv), np.nan, values)
+        values = np.where(np.abs(values) >= SIF_FILL_MAGNITUDE, np.nan, values)
+
+        lats = np.asarray(ds[lat_name].values, dtype="float64").reshape(1, -1)  # type: ignore[index]
+        lons = np.asarray(ds[lon_name].values, dtype="float64").reshape(1, -1)  # type: ignore[index]
+        values = values.reshape(1, 1, -1)
+        times = np.array([np.datetime64(_granule_day(ds, start))])
+        return self.reduce_arrays(
+            lats, lons, times, values, spec, start, end,
+            var_name=vsingle, already_combined=True,
         )
 
     # -- the architecture-critical, hermetically-tested core -----------------
@@ -412,6 +484,35 @@ def _first_present(ds: object, names: tuple[str, ...]) -> str | None:
         if name in data_vars:
             return name
     return None
+
+
+def _first_var(ds: object, names: tuple[str, ...], *, in_data_vars: bool = False) -> str | None:
+    """First name present among the dataset's variables (data_vars + coords), else None.
+
+    Unlike :func:`_first_present`, this also looks at coords/variables so the real
+    Lite product's capitalized ``Latitude``/``Longitude`` data_vars are found.
+    """
+    pool = set(getattr(ds, "data_vars", {}))
+    if not in_data_vars:
+        pool |= set(getattr(ds, "variables", {}))
+    for name in names:
+        if name in pool:
+            return name
+    return None
+
+
+def _granule_day(ds: object, fallback: datetime) -> str:
+    """Granule day ``YYYY-MM-DD`` for the per-granule daily series timestamp.
+
+    Prefer a product start-date global attr; fall back to the request start (the
+    OCO-3 Lite SIF product is daily, so a single per-granule day is sufficient).
+    """
+    attrs = getattr(ds, "attrs", {})
+    for attr in ("RangeBeginningDate", "time_coverage_start"):
+        val = attrs.get(attr)
+        if isinstance(val, str) and len(val) >= 10 and val[4] == "-":
+            return val[:10]
+    return fallback.strftime("%Y-%m-%d")
 
 
 def _to_time_lat_lon(

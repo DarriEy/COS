@@ -290,6 +290,49 @@ def test_two_dimensional_coords_nearest_cell():
     assert series.points[0].value == pytest.approx(310.0, abs=1e-6)
 
 
+def test_native_abi_fixed_grid_geolocation(tmp_path):
+    """Regression: real NODD ABI L2 granules ship NO lat/lon — only scan angles
+    x/y (radians) and a goes_imager_projection. The connector must geolocate them
+    (NOAA fixed-grid transform) instead of KeyError'ing on a missing 'lat'.
+    """
+    xr = pytest.importorskip("xarray")
+    pytest.importorskip("netCDF4")
+    # Fixed-grid stand-in near the GOES-16 sub-point (lon0 = -75). Uniform 300 K,
+    # so basin_mean over whatever cells geolocate inside the bbox is exactly 300.
+    x = np.array([-0.01, 0.0, 0.01])     # E-W scan angle, radians
+    y = np.array([0.06, 0.05, 0.04])     # N-S elevation angle, radians
+    lst = np.full((3, 3), 300.0, dtype="float32")
+    dqf = np.zeros((3, 3), dtype="float32")
+    proj = xr.DataArray(
+        0,
+        attrs=dict(
+            grid_mapping_name="geostationary",
+            perspective_point_height=35786023.0,
+            semi_major_axis=6378137.0,
+            semi_minor_axis=6356752.31414,
+            longitude_of_projection_origin=-75.0,
+            sweep_angle_axis="x",
+        ),
+    )
+    ds = xr.Dataset(
+        {"LST": (("y", "x"), lst), "DQF": (("y", "x"), dqf), "goes_imager_projection": proj},
+        coords={"y": y, "x": x, "t": np.datetime64("2024-06-28T18:02:36")},
+    )
+    path = tmp_path / "OR_ABI-L2-LSTC-M6_G16.nc"
+    ds.to_netcdf(path)
+
+    spec = ReductionSpec(
+        domain_name="conus", bbox=(-10.0, -85.0, 40.0, -65.0),
+        centroid=(8.0, -75.0), area_km2=8000.0,
+    )
+    series = GOESLSTConnector().reduce_file(
+        path, spec, datetime(2024, 6, 28, tzinfo=UTC), datetime(2024, 6, 29, tzinfo=UTC),
+    )
+    assert series.unit == "K"
+    assert series.points and series.points[0].value == pytest.approx(300.0, abs=1e-6)
+    assert series.points[0].quality.value == "good"
+
+
 def test_anonymous_no_auth_spec():
     """Spec contract: AWS NODD is open data -> connector requires no auth provider."""
     conn = GOESLSTConnector()

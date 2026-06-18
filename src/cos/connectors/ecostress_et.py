@@ -30,8 +30,11 @@ behind LP DAAC / NASA Earthdata):
       :data:`WM2_TO_MM_PER_DAY` mm/day per W/m² (≈ 0.0353). This is the standard
       W/m² → mm/day latent-heat conversion used for instantaneous ET flux. Note
       ``ETinst`` is an instantaneous (overpass-time) flux, not a 24-h mean, so the
-      W/m² path yields an *instantaneous-rate* mm/day; prefer ``ETdaily`` for a
-      true daily total — the source variable is recorded in ``source_info``.
+      W/m² path yields an *instantaneous-rate* mm/day; ``ETdaily`` is preferred and
+      auto-picked whenever present. When an instantaneous flux
+      (:data:`_INSTANTANEOUS_ET_VARS`) is the only ET signal, the conversion is
+      still applied but a warning is logged and ``source_info["instantaneous_scaled"]``
+      is set ``"true"`` so consumers can down-weight the (over-)estimate.
 * The no-retrieval fill is ``-9999`` (:data:`ET_FILL_VALUE`); cells equal to the
   fill, non-finite, negative, or outside the physical valid band
   (:data:`VALID_ET_RANGE_MM_DAY`, mm/day, applied **after** conversion) are masked
@@ -108,6 +111,15 @@ _WM2_UNITS = {"w/m2", "w/m^2", "wm-2", "w m-2", "watt/m2"}
 #: is preferred over the instantaneous W/m² ``ETinst`` because it is a true daily
 #: total in the canonical unit.
 ET_VARIABLES = ("ETdaily", "ETcanopy", "ET", "et", "ETinst", "et_inst", "ETPTJPL")
+#: ET variable names that are an INSTANTANEOUS (overpass-time) W/m² latent-heat
+#: flux. Scaling these to mm/day by 86400 s assumes the overpass rate is sustained
+#: 24 h, which OVERESTIMATES the daily total — so when one of these is the only ET
+#: signal present (``ETdaily`` is preferred and would be auto-picked if present),
+#: the conversion is still applied but a warning is emitted and provenance is
+#: stamped (``source_info["instantaneous_scaled"]``) so consumers can down-weight.
+_INSTANTANEOUS_ET_VARS = frozenset({
+    "ETinst", "et_inst", "PTJPLSMinst", "STICinst", "BESSinst", "MOD16inst",
+})
 #: <= this area (km²) defaults to nearest_cell; larger uses basin_mean.
 MEDIUM_BASIN_THRESHOLD_KM2 = 1000.0
 
@@ -216,6 +228,17 @@ class ECOSTRESSETConnector(BaseObservationConnector):
         is_fill = (values == ET_FILL_VALUE) | ~np.isfinite(values)
 
         factor, resolved_units = self._conversion_factor(source_units)
+        # An instantaneous overpass-time W/m² flux scaled to mm/day overestimates
+        # the daily total (ETdaily is preferred and auto-picked whenever present).
+        instantaneous = resolved_units == "W/m2" and var_name in _INSTANTANEOUS_ET_VARS
+        if instantaneous:
+            logger.warning(
+                "ecostress_et.instantaneous_flux_scaled",
+                variable=var_name,
+                detail="instantaneous (overpass-time) W/m² latent-heat flux scaled to "
+                       "mm/day assumes the rate holds 24 h and OVERESTIMATES daily ET; "
+                       "supply ETdaily for a true daily total.",
+            )
         values = values * factor  # source -> canonical mm/day at the boundary
 
         lo, hi = VALID_ET_RANGE_MM_DAY
@@ -261,6 +284,7 @@ class ECOSTRESSETConnector(BaseObservationConnector):
                 "url": "https://lpdaac.usgs.gov/products/eco3etptjplv001/",
                 "variable": var_name,
                 "source_units": resolved_units,
+                "instantaneous_scaled": str(instantaneous).lower(),
             },
             fetched_at=datetime.now(UTC),
         )
@@ -406,11 +430,26 @@ def _to_time_lat_lon(
 
     A tiled ECOSTRESS product may ship ``(lat, lon, time)`` while
     :func:`cos.core.reduce.basin_mean`/``nearest_cell`` index ``(time, lat, lon)``.
-    Reorder only the dims that exist (a 2-D single-time grid has no time dim),
-    keeping any unexpected leading dims ahead of the canonical trailing axes.
+
+    When ``lat``/``lon`` are 2-D *coordinates* (the real tiled/swath products from
+    GDAL/rioxarray ride them on dims named ``y``/``x``, not ``lat``/``lon``), the
+    spatial axes to reorder are those underlying *dimensions* — otherwise ``y``/``x``
+    look like unexpected leading dims and ``time`` gets pushed to the trailing axis,
+    breaking the downstream ``(time, lat, lon)`` reduction. Reorder only the dims
+    that exist (a 2-D single-time grid has no time dim).
     """
     dims = tuple(str(d) for d in da.dims)
-    wanted = [d for d in (time_name, lat_name, lon_name) if d in dims]
+    coords = getattr(da, "coords", {})
+    spatial: list[str] = []
+    for coord in (lat_name, lon_name):
+        if coord in coords and getattr(da[coord], "ndim", 1) == 2:
+            spatial.extend(str(d) for d in da[coord].dims)
+        elif coord in dims:
+            spatial.append(coord)
+    seen: dict[str, None] = {}
+    for d in spatial:
+        seen.setdefault(d, None)
+    wanted = ([time_name] if time_name in dims else []) + [d for d in seen if d in dims]
     if not wanted:
         return da
     leading = [d for d in dims if d not in wanted]

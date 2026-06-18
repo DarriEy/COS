@@ -257,15 +257,51 @@ def test_reduce_file_window_trim_half_open(swot_storage_nc):
     assert (2024, 7) not in months
 
 
+# Real Hydrocron LakeSP schema: storage change is field 'ds1_l' (km^3), NOT
+# 'storage'; 'ds2_l' is frequently all-fill. Captured from the live API for lake
+# 6350036102 (a documented example feature) — the exact column layout + units
+# column name ('ds1_l_units') the connector must parse.
+REAL_HYDROCRON_CSV = """\
+lake_id,time_str,ds1_l,ds2_l,ds1_l_units,ds2_l_units
+6350036102,2024-01-17T17:04:22Z,5.9e-05,-999999999999.0,km^3,km^3
+6350036102,2024-09-03T05:20:13Z,-1.5e-05,-999999999999.0,km^3,km^3
+"""
+
+
+def test_parses_real_hydrocron_ds1_l_schema():
+    """Regression: real Hydrocron storage change is field 'ds1_l' (km^3), not 'storage'.
+
+    The connector previously queried/parsed a 'storage' column that does not exist
+    in the live API (Hydrocron 400-rejects it). It must take the first present of
+    STORAGE_CHANGE_FIELDS, find the '<field>_units' column, and preserve the signed
+    storage change (negative drawdown not masked).
+    """
+    pts = SWOTLakeStorageConnector.parse_timeseries(
+        REAL_HYDROCRON_CSV,
+        datetime(2024, 1, 1, tzinfo=UTC), datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    by_date = {p.timestamp.date().isoformat(): p for p in pts}
+    assert by_date["2024-01-17"].value == pytest.approx(5.9e-05)   # positive
+    assert by_date["2024-09-03"].value == pytest.approx(-1.5e-05)  # signed drawdown preserved
+    assert all(p.quality.value == "good" for p in pts)
+
+
+def test_fields_request_real_hydrocron_storage_field():
+    """The request must ask for ds1_l/ds2_l, never the non-existent 'storage' field."""
+    assert "ds1_l" in SWOTLakeStorageConnector.FIELDS
+    assert ",storage" not in SWOTLakeStorageConnector.FIELDS
+
+
 @pytest.mark.network
 @pytest.mark.asyncio
 async def test_live_smoke_swot_lake_storage():
     """LIVE smoke against the real anonymous Hydrocron endpoint.
 
     Run with: pytest -m network tests/connectors/test_swot_lake_storage.py -k live
+    Lake 6350036102 is a documented example PriorLake feature with real storage data.
     """
     conn = SWOTLakeStorageConnector()
-    spec = ReductionSpec(domain_name="lakes", station_ids=("6350900223",))
+    spec = ReductionSpec(domain_name="lakes", station_ids=("6350036102",))
     async with conn:
         series_list = await conn.fetch_series(
             spec, datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 12, 31, tzinfo=UTC)

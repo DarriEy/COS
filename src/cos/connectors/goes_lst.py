@@ -28,13 +28,15 @@ mesoscale sub-hourly) is the differentiation versus polar-orbiting MODIS LST:
 many observations per day over a fixed footprint rather than one or two
 overpasses.
 
-The real ABI L2 grid is the **fixed-grid ABI projection** (geostationary
-scan/elevation angles), so a supplied LST NetCDF may carry **2-D** lat/lon (the
-geolocated curvilinear grid) as well as the simpler 1-D regridded case. This
-connector therefore carries both the 1-D :func:`cos.core.reduce.reduce_grid`
-path and a dedicated 2-D-coordinate reduction path (bbox mask + cos-lat-weighted
-mean / nearest valid cell), mirroring the AMSR2 EASE-Grid handling, and
-normalizes dim order to ``(time, lat, lon)`` before reducing.
+The real NODD ABI L2 granule is on the **fixed-grid ABI projection**: it ships
+**no** lat/lon, only the geostationary scan/elevation angles ``x``/``y`` (radians)
+and a ``goes_imager_projection`` grid-mapping. This connector geolocates those to
+a 2-D lat/lon grid (:func:`_abi_fixed_grid_latlon`, the NOAA GOES-R PUG
+fixed-grid → geodetic transform) and takes the dedicated 2-D-coordinate reduction
+path (bbox mask + cos-lat-weighted mean / nearest valid cell), mirroring the AMSR2
+EASE-Grid handling. A pre-regridded file carrying explicit 1-D or 2-D lat/lon is
+also supported (the 1-D :func:`cos.core.reduce.reduce_grid` path), with dim order
+normalized to ``(time, lat, lon)`` before reducing.
 
 This connector extracts ``lats, lons, times, lst, dqf`` from a supplied file
 (config ``nc_path`` / ``path`` — live AWS NODD S3 download is not yet wired,
@@ -148,21 +150,37 @@ class GOESLSTConnector(BaseObservationConnector):
                     f"NetCDF missing an ABI L2 LST variable (tried {LST_VARIABLES})",
                 )
             dqf_name = self._find_variable(ds, DQF_VARIABLES, "DQF")
-            lat_name = "lat" if "lat" in ds else _coord_like(ds, "lat")
-            lon_name = "lon" if "lon" in ds else _coord_like(ds, "lon")
-            time_name = "time" if "time" in ds else _coord_like(ds, "time")
-            # ABI L2 grids may be dim-ordered (lat, lon, time) or carry a 2-D
-            # geolocated grid; normalize the LST (and DQF) dim order to
-            # (time, lat, lon) by the dataset's own dim names before reducing.
-            da = _to_time_lat_lon(ds[var_name], time_name, lat_name, lon_name)
-            lats = np.asarray(ds[lat_name].values, dtype="float64")
-            lons = np.asarray(ds[lon_name].values, dtype="float64")
-            times = np.asarray(ds[time_name].values)
-            values = np.asarray(da.values, dtype="float64")
-            dqf = None
-            if dqf_name is not None and dqf_name in ds:
-                dqf_da = _to_time_lat_lon(ds[dqf_name], time_name, lat_name, lon_name)
-                dqf = np.asarray(dqf_da.values, dtype="float64")
+            has_latlon = (("lat" in ds) or (_coord_like(ds, "lat") in ds)) and (
+                ("lon" in ds) or (_coord_like(ds, "lon") in ds)
+            )
+            if not has_latlon and "goes_imager_projection" in ds and "x" in ds and "y" in ds:
+                # Native ABI L2 fixed-grid granule (the NODD product): no lat/lon
+                # shipped — only the geostationary scan angles x/y (radians) and a
+                # goes_imager_projection grid-mapping. Geolocate them to a 2-D
+                # lat/lon grid and take the 2-D reduction path. A single-time
+                # granule is (y, x); add the leading time axis the reducer expects.
+                lats, lons = _abi_fixed_grid_latlon(ds)
+                times = _granule_times(ds)
+                values = _with_time_axis(np.asarray(ds[var_name].values, dtype="float64"))
+                dqf = None
+                if dqf_name is not None and dqf_name in ds:
+                    dqf = _with_time_axis(np.asarray(ds[dqf_name].values, dtype="float64"))
+            else:
+                lat_name = "lat" if "lat" in ds else _coord_like(ds, "lat")
+                lon_name = "lon" if "lon" in ds else _coord_like(ds, "lon")
+                time_name = "time" if "time" in ds else _coord_like(ds, "time")
+                # ABI L2 grids may be dim-ordered (lat, lon, time) or carry a 2-D
+                # geolocated grid; normalize the LST (and DQF) dim order to
+                # (time, lat, lon) by the dataset's own dim names before reducing.
+                da = _to_time_lat_lon(ds[var_name], time_name, lat_name, lon_name)
+                lats = np.asarray(ds[lat_name].values, dtype="float64")
+                lons = np.asarray(ds[lon_name].values, dtype="float64")
+                times = np.asarray(ds[time_name].values)
+                values = np.asarray(da.values, dtype="float64")
+                dqf = None
+                if dqf_name is not None and dqf_name in ds:
+                    dqf_da = _to_time_lat_lon(ds[dqf_name], time_name, lat_name, lon_name)
+                    dqf = np.asarray(dqf_da.values, dtype="float64")
         return self.reduce_arrays(
             lats, lons, times, values, spec, start, end, dqf=dqf, var_name=var_name
         )
@@ -380,6 +398,67 @@ def _coord_like(ds: object, want: str) -> str:
         if want in str(name).lower():
             return str(name)
     return want
+
+
+def _with_time_axis(arr: np.ndarray) -> np.ndarray:
+    """Add a leading singleton time axis to a single-time 2-D ``(y, x)`` array.
+
+    The reducer indexes ``(time, lat, lon)``; a native single-time ABI granule
+    ships ``(y, x)``. Higher-rank arrays pass through unchanged.
+    """
+    return arr[None, ...] if arr.ndim == 2 else arr
+
+
+def _granule_times(ds: object) -> np.ndarray:
+    """The ABI granule timestamp(s) as a 1-D array (scan-start ``t``, else ``time``)."""
+    import numpy as np
+
+    for name in ("t", "time"):
+        if name in ds:  # type: ignore[operator]
+            return np.atleast_1d(np.asarray(ds[name].values))  # type: ignore[index]
+    return np.atleast_1d(np.datetime64("1970-01-01"))
+
+
+def _abi_fixed_grid_latlon(ds: object) -> tuple[np.ndarray, np.ndarray]:
+    """Geolocate ABI fixed-grid scan angles to 2-D geodetic lat/lon (degrees).
+
+    Implements the NOAA GOES-R PUG fixed-grid → geodetic transform: the
+    ``goes_imager_projection`` grid-mapping (perspective-point height, GRS-80
+    semi-axes, sub-satellite longitude) plus the per-pixel scan/elevation angles
+    ``x``/``y`` (radians) give each cell's latitude/longitude. Off-disk cells
+    (negative intersection discriminant) come back ``NaN`` and are dropped by the
+    2-D reducer's finite-coordinate mask.
+    """
+    import numpy as np
+
+    p = ds["goes_imager_projection"]  # type: ignore[index]
+    r_eq = float(p.attrs["semi_major_axis"])
+    r_pol = float(p.attrs["semi_minor_axis"])
+    h_sat = float(p.attrs["perspective_point_height"]) + r_eq
+    lon0 = np.deg2rad(float(p.attrs["longitude_of_projection_origin"]))
+
+    x = np.asarray(ds["x"].values, dtype="float64")  # type: ignore[index]
+    y = np.asarray(ds["y"].values, dtype="float64")  # type: ignore[index]
+    grid_x, grid_y = np.meshgrid(x, y)  # (ny, nx), matching the (y, x) data grid
+
+    with np.errstate(invalid="ignore"):
+        a = (
+            np.sin(grid_x) ** 2
+            + np.cos(grid_x) ** 2
+            * (np.cos(grid_y) ** 2 + (r_eq**2 / r_pol**2) * np.sin(grid_y) ** 2)
+        )
+        b = -2.0 * h_sat * np.cos(grid_x) * np.cos(grid_y)
+        c = h_sat**2 - r_eq**2
+        disc = b**2 - 4.0 * a * c
+        r_s = np.where(disc >= 0.0, (-b - np.sqrt(disc)) / (2.0 * a), np.nan)
+        s_x = r_s * np.cos(grid_x) * np.cos(grid_y)
+        s_y = -r_s * np.sin(grid_x)
+        s_z = r_s * np.cos(grid_x) * np.sin(grid_y)
+        lat = np.degrees(
+            np.arctan((r_eq**2 / r_pol**2) * (s_z / np.sqrt((h_sat - s_x) ** 2 + s_y**2)))
+        )
+        lon = np.degrees(lon0 - np.arctan(s_y / (h_sat - s_x)))
+    return lat, lon
 
 
 def _to_time_lat_lon(

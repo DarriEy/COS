@@ -221,6 +221,55 @@ def test_reduce_file_combines_and_canonicalizes(oco3_nc):
 
 
 @pytest.fixture
+def oco3_nc_sounding(tmp_path):
+    """Real OCO3_L2_Lite_SIF layout: 1-D sounding_dim, Latitude/Longitude as
+    data_vars (no coords, no `time`), combined SIF_740nm in W/m^2/sr/µm, with the
+    real ≈ -9e30 missing_value fill (NOT the gridded -999999)."""
+    xr = pytest.importorskip("xarray")
+    pytest.importorskip("netCDF4")
+    lat = np.array([7.0, 7.5, 8.0, 9.0, 50.0])      # 4 in-bbox, 1 far away
+    lon = np.array([126.0, 127.0, 128.0, 129.0, -100.0])
+    sif = np.array([2.0, 2.0, 2.0, 2.0, 1.5], dtype="float32")
+    sif[3] = -9e30                                  # real fill on one in-bbox sounding
+    fill = np.float32(-9e30)
+    ds = xr.Dataset(
+        {
+            "Latitude": (("sounding_dim",), lat.astype("float32"),
+                         {"units": "degrees_north", "missing_value": fill}),
+            "Longitude": (("sounding_dim",), lon.astype("float32"),
+                          {"units": "degrees_east", "missing_value": fill}),
+            "SIF_740nm": (("sounding_dim",), sif,
+                          {"units": "W/m^2/sr/um", "missing_value": fill}),
+            "Delta_Time": (("sounding_dim",), np.full(5, 9.9e8)),
+        },
+        attrs={"RangeBeginningDate": "2021-07-01"},
+    )
+    path = tmp_path / "oco3_LtSIF_sounding.nc"
+    ds.to_netcdf(path)
+    return path
+
+
+def test_reduce_file_real_sounding_layout(oco3_nc_sounding):
+    """Regression: the real 1-D per-sounding Lite layout reduces without KeyError,
+    uses SIF_740nm (not a 757/771 re-combine), masks the -9e30 fill, stays canonical."""
+    conn = OCO3SIFConnector()
+    spec = ReductionSpec(
+        domain_name="seasia", bbox=(5.0, 125.0, 10.0, 130.0),
+        centroid=(7.5, 127.5), area_km2=200000.0,  # large -> basin_mean
+    )
+    series = conn.reduce_file(
+        oco3_nc_sounding, spec,
+        datetime(2021, 7, 1, tzinfo=UTC), datetime(2021, 7, 2, tzinfo=UTC),
+    )
+    assert series.unit == "mW/m2/nm/sr"
+    assert series.source_info["variable"] == "SIF_740nm"   # not a 757/771 re-combine
+    assert len(series.points) == 1
+    p = series.points[0]
+    assert p.value == pytest.approx(2.0, abs=1e-6)          # fill + far soundings excluded
+    assert p.quality.value == "good"
+
+
+@pytest.fixture
 def oco3_nc_lat_lon_time(tmp_path):
     """Real-data shape: a (lat, lon, time)-ordered OCO-3 SIF NetCDF.
 

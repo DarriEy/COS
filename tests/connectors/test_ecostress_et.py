@@ -92,6 +92,8 @@ def test_reduce_arrays_wm2_latent_heat_conversion():
     assert series.source_info["source_units"] == "W/m2"
     assert series.points[0].value == pytest.approx(100.0 * WM2_TO_MM_PER_DAY, abs=1e-6)
     assert series.points[0].quality.value == "good"
+    # ETinst instantaneous flux scaled to mm/day -> provenance flag stamped.
+    assert series.source_info["instantaneous_scaled"] == "true"
 
 
 def test_wm2_unit_aliases_recognized():
@@ -228,6 +230,42 @@ def test_reduce_file_lat_lon_time_ordering(ecostress_nc_lat_lon_time):
     for p in series.points:
         assert p.value == pytest.approx(4.0, abs=1e-6)
         assert p.quality.value == "good"
+    assert series.source_info["variable"] == "ETdaily"
+
+
+@pytest.fixture
+def ecostress_nc_2d_coords_yx(tmp_path):
+    """Real-data shape: a tiled product with 2-D lat/lon *coordinates* riding on
+    (y, x) dims and a (time, y, x) ET var — exactly what GDAL/rioxarray emit for
+    the ECOSTRESS L3 Tiled (UTM) GeoTIFFs. reduce_file must reorder by the y/x
+    dims (not push time to the trailing axis) or basin_mean broadcast-fails.
+    """
+    xr = pytest.importorskip("xarray")
+    pytest.importorskip("netCDF4")
+    lat2d, lon2d = np.meshgrid(_LATS, _LONS, indexing="ij")  # (3, 3) on (y, x)
+    times = np.array(["2020-06-15"], dtype="datetime64[ns]")
+    data = np.full((1, 3, 3), 4.0)  # (time, y, x), mm/day
+    ds = xr.Dataset(
+        {"ETdaily": (("time", "y", "x"), data, {"units": "mm/day"})},
+        coords={"time": times, "lat": (("y", "x"), lat2d), "lon": (("y", "x"), lon2d)},
+    )
+    path = tmp_path / "ecostress_2d_yx.nc"
+    ds.to_netcdf(path)
+    return path
+
+
+def test_reduce_file_2d_coords_on_yx_dims(ecostress_nc_2d_coords_yx):
+    """Regression: 2-D lat/lon coords on (y, x) dims must reduce to one point per
+    time step. Previously _to_time_lat_lon reordered (time, y, x) -> (y, x, time)
+    because it looked for 'lat'/'lon' among the dims and found only y/x."""
+    conn = ECOSTRESSETConnector()
+    series = conn.reduce_file(
+        ecostress_nc_2d_coords_yx, _big_spec(),
+        datetime(2020, 1, 1, tzinfo=UTC), datetime(2021, 1, 1, tzinfo=UTC),
+    )
+    assert series.unit == "mm/day"
+    assert len(series.points) == 1
+    assert series.points[0].value == pytest.approx(4.0, abs=1e-6)
     assert series.source_info["variable"] == "ETdaily"
 
 

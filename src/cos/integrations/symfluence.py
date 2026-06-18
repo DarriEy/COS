@@ -166,9 +166,11 @@ class ObservationCapabilitySpec(NamedTuple):
 
 #: Every connector (50) carries a real parity grade -> the SYMFLUENCE gate admits
 #: all of them WITHOUT ALLOW_UNGATED_BACKENDS (subject to the license-posture gate
-#: below: ``restricted`` sources are refused regardless of grade). 35 of 50 are
-#: validated on REAL data; the 7 frontier connectors are spec-validated /
-#: parity-by-construction with live runs pending. Validation tiers, honestly
+#: below: ``restricted`` sources are refused regardless of grade). 41 of 50 are
+#: validated on REAL data; of the 7 frontier connectors, 6 are now live-validated
+#: (csr_grace/gsfc_grace LIVE; goes_lst/ecostress_et/oco3_sif/swot_lake_storage
+#: LIVE-spec) and only ecostress_lst stays spec-validated (its live LP DAAC
+#: products need new HDF-EOS-GRID / COG / swath ingest). Validation tiers, honestly
 #: labeled in each grade string:
 #:  * LIVE (26): native-parity verified on REAL downloaded data (grace/snotel +
 #:    the live spot-check campaign + the CDS/AmeriFlux set via the creds we hold
@@ -230,13 +232,13 @@ _VALIDATED_PARITY: dict[str, str] = {
     "smap_freeze_thaw": "LIVE-spec: real SMAP SPL3FTP frozen-fraction (Arctic 1.0); test_smap_freeze_thaw.py",
     # Frontier (next-frontier build) — spec-validated / parity-by-construction;
     # live runs pending (anon for goes/swot; Earthdata for ecostress/oco3/gsfc).
-    "goes_lst": "spec-validated: GOES-R ABI L2 LST (Kelvin, DQF-masked, anon AWS s3); no live run; test_goes_lst.py",
-    "ecostress_lst": "spec-validated: ECOSTRESS L2 LST (uint->K, fill-masked); live pending; test_ecostress_lst.py",
-    "ecostress_et": "spec-validated: ECOSTRESS L3 ET PT-JPL (mm/day); live pending; test_ecostress_et.py",
-    "oco3_sif": "spec-validated: OCO-3 Lite SIF (mW/m2/nm/sr, fill-masked); live pending; test_oco3_sif.py",
-    "swot_lake_storage": "spec-validated: SWOT lake storage via Hydrocron (anon, km3); test_swot_lake_storage.py",
-    "csr_grace": "parity-by-construction: native CSR mascon GRACE reduction (cm->mm); test_csr_grace.py",
-    "gsfc_grace": "parity-by-construction: native GSFC mascon GRACE reduction (cm->mm); test_gsfc_grace.py",
+    "goes_lst": "LIVE-spec: real GOES-16 ABI L2 LSTC (fixed-grid x/y->lat/lon, DQF-masked, K); test_goes_lst.py",
+    "ecostress_lst": "spec-validated: ECOSTRESS L2 LST; LIVE-blocked, needs new ingest; test_ecostress_lst.py",
+    "ecostress_et": "LIVE-spec: real ECOSTRESS L3T JET ETdaily 1.46 mm/day; y/x transpose fixed; test_ecostress_et.py",
+    "oco3_sif": "LIVE-spec: real OCO-3 Lite SIF_740nm (sounding_dim, -9e30 fill) -> 1.94 mW/m2/nm/sr; test_oco3_sif.py",
+    "swot_lake_storage": "LIVE-spec: real SWOT LakeSP storage (Hydrocron anon, ds1_l km3); test_swot_lake_storage.py",
+    "csr_grace": "LIVE: real CSR RL0603 mascon (csr.utexas.edu), Amazon cm->mm, -325..+433 mm; test_csr_grace.py",
+    "gsfc_grace": "LIVE: real GSFC halfdegree mascon (gsfc.nasa.gov), Amazon cm->mm, 2010-drought; test_gsfc_grace.py",
 }
 
 #: Data-license posture per connector, keyed by slug → ``(redistribution,

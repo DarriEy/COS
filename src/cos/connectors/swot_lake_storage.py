@@ -13,13 +13,17 @@ Earthdata token, the same access path proven for lake area in
     GET /hydrocron/v1/timeseries
         ?feature=PriorLake&feature_id=<lake_id>
         &start_time=<ISO>&end_time=<ISO>
-        &output=csv&fields=lake_id,time_str,storage
+        &output=csv&fields=lake_id,time_str,ds1_l,ds2_l
 
 There is **no SYMFLUENCE native** for SWOT lake storage, so parity is
 *spec-validated*: the connector is validated against the published Hydrocron lake
 product spec rather than a native handler. The load-bearing facts encoded here:
 
-* **unit**: Hydrocron returns the SWOT LakeSP ``storage`` (storage *change*) in
+* **field**: SWOT LakeSP storage *change* is exposed by Hydrocron as ``ds1_l``
+  (linear-fit estimate, primary) and ``ds2_l`` (quadratic); there is NO field
+  literally named ``storage`` (Hydrocron 400-rejects it). The parser takes the
+  first present of :data:`STORAGE_CHANGE_FIELDS`;
+* **unit**: Hydrocron returns the SWOT LakeSP storage change in
   **km³**, which is exactly the canonical
   :class:`~cos.core.models.ObservationKind.WATER_STORAGE` unit
   (``KIND_UNITS[ObservationKind.WATER_STORAGE] == "km3"``). The conversion at the
@@ -95,6 +99,12 @@ VALID_STORAGE_RANGE_KM3 = (-1.0e5, 1.0e5)
 MEDIUM_BASIN_THRESHOLD_KM2 = 1000.0
 #: Storage variable names tried in a supplied NetCDF (gridded path), common order.
 STORAGE_VARIABLES = ("storage", "storage_change", "delta_s", "ds", "Band1", "band1")
+#: Hydrocron storage-CHANGE CSV columns, in preference order. SWOT LakeSP exposes
+#: storage change as ``ds1_l`` (linear-fit estimate, the primary populated series)
+#: and ``ds2_l`` (quadratic), each with a ``_q`` quality twin; ``ds2_*`` is
+#: frequently all-fill. There is NO ``storage`` field in the live Hydrocron API —
+#: it is kept here only as a last-resort header name for a supplied/legacy CSV.
+STORAGE_CHANGE_FIELDS = ("ds1_l", "ds2_l", "ds1_q", "ds2_q", "storage")
 
 
 @register("swot_lake_storage")
@@ -108,8 +118,10 @@ class SWOTLakeStorageConnector(BaseObservationConnector):
 
     #: Hydrocron feature class for prior-lake storage time series.
     DEFAULT_FEATURE = "PriorLake"
-    #: minimal field set the parser needs (units come back automatically).
-    FIELDS = "lake_id,time_str,storage"
+    #: minimal field set the parser needs (units come back automatically). SWOT
+    #: storage change is the ``ds1_l``/``ds2_l`` fields, NOT ``storage`` (which
+    #: Hydrocron 400-rejects as an invalid SWOT field).
+    FIELDS = "lake_id,time_str,ds1_l,ds2_l"
 
     async def list_sites(self, spec: ReductionSpec) -> list[SiteRef]:
         """Sites are the explicitly-requested SWOT prior-lake ids.
@@ -181,7 +193,8 @@ class SWOTLakeStorageConnector(BaseObservationConnector):
 
         Hydrocron may wrap the CSV in a JSON envelope (``{"results": {"csv":
         "..."}}``) or return raw CSV; both are accepted. Columns are matched by
-        header name (order-independent): ``time_str`` and ``storage`` are required.
+        header name (order-independent): ``time_str`` and one of
+        :data:`STORAGE_CHANGE_FIELDS` (``ds1_l``/``ds2_l``/…) are required.
 
         Spec-validated behaviour (no native to mirror):
 
@@ -210,13 +223,15 @@ class SWOTLakeStorageConnector(BaseObservationConnector):
             raise DataFormatError(
                 "swot_lake_storage", f"Hydrocron CSV missing 'time_str' column: {header}"
             ) from exc
-        try:
-            storage_idx = header.index("storage")
-        except ValueError as exc:
+        storage_col = next((c for c in STORAGE_CHANGE_FIELDS if c in header), None)
+        if storage_col is None:
             raise DataFormatError(
-                "swot_lake_storage", f"Hydrocron CSV missing 'storage' column: {header}"
-            ) from exc
-        units_idx = header.index("storage_units") if "storage_units" in header else None
+                "swot_lake_storage",
+                f"Hydrocron CSV has no SWOT storage-change field {STORAGE_CHANGE_FIELDS}: {header}",
+            )
+        storage_idx = header.index(storage_col)
+        units_col = f"{storage_col}_units"
+        units_idx = header.index(units_col) if units_col in header else None
 
         start_u = _utc(start)
         end_u = _utc(end)
