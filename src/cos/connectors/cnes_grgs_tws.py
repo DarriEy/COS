@@ -97,7 +97,6 @@ class CNESGRGSConnector(BaseObservationConnector):
         end: datetime,
     ) -> ObservationSeries:
         """Parse CNES/GRGS ASCII grid(s), reduce to the basin, canonicalize to mm anomaly."""
-        import numpy as np
 
         from cos.core.reduce import reduce_grid
 

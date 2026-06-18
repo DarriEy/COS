@@ -382,8 +382,11 @@ def test_parity_window_is_half_open_vs_native_closed(snodas_nc):
     times = np.array(["2022-01-01", "2022-01-02", "2022-01-03", "2022-01-04"],
                      dtype="datetime64[ns]")
     values_m = np.empty((4, 3, 3), dtype="float64")
-    values_m[0] = 0.10; values_m[1] = 0.25; values_m[2] = 0.40
-    values_m[2, 0, 0] = np.nan; values_m[3] = -0.001
+    values_m[0] = 0.10
+    values_m[1] = 0.25
+    values_m[2] = 0.40
+    values_m[2, 0, 0] = np.nan
+    values_m[3] = -0.001
     native = _native_swe_mm(values_m, lats, (50.0, -116.0, 52.0, -114.0),
                             datetime(2022, 1, 1, tzinfo=UTC),
                             datetime(2022, 1, 3, tzinfo=UTC), times)

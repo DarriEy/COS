@@ -168,10 +168,8 @@ def _native_netcdf_basin_mean(values, start, end, times):
             continue
         layer = values[k]
         finite = np.isfinite(layer)
-        if not finite.any():
-            mean = np.nan  # all-skipna -> NaN, native drops/leaves as missing
-        else:
-            mean = float(np.nanmean(layer))  # UNWEIGHTED spatial mean
+        # all-skipna -> NaN (native drops/leaves missing); else UNWEIGHTED mean
+        mean = np.nan if not finite.any() else float(np.nanmean(layer))
         if not np.isnan(mean):
             mean = max(mean, 0.0)  # df['et_mm_day'].clip(lower=0)
         out[ts] = mean

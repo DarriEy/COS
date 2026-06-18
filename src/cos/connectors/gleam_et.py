@@ -188,9 +188,7 @@ class GLEAMETConnector(BaseObservationConnector):
         candidates: list[str] = []
         for name in ds.data_vars:
             lower = str(name).lower()
-            if lower in _ET_NAMES:
-                candidates.append(str(name))
-            elif "et" in lower and "pet" not in lower:
+            if lower in _ET_NAMES or "et" in lower and "pet" not in lower:
                 candidates.append(str(name))
         if candidates:
             return candidates[0]

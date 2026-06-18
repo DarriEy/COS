@@ -7,9 +7,7 @@ masking, and half-open UTC window trim that mirror the native SYMFLUENCE handler
 
 from datetime import UTC, datetime
 
-import httpx
 import pytest
-import respx
 
 from cos.connectors.fluxnet_et import LE_TO_ET_FACTOR, FluxnetETConnector
 from cos.core.exceptions import ConnectorError, DataFormatError
@@ -230,12 +228,12 @@ def test_parity_le_to_et_unit_factor_exact_vs_named_intent():
     mm/m factor explicit. The two derivations are identical to float tolerance.
     """
     cos_derived = _NATIVE_SECONDS_PER_DAY * 1000.0 / (_NATIVE_WATER_DENSITY * _NATIVE_LATENT_HEAT)
-    assert LE_TO_ET_FACTOR == pytest.approx(cos_derived, rel=1e-12)
+    assert pytest.approx(cos_derived, rel=1e-12) == LE_TO_ET_FACTOR
     # within rounding of the published named constant (0.0353).
-    assert LE_TO_ET_FACTOR == pytest.approx(_NATIVE_NAMED_FACTOR, abs=1e-4)
+    assert pytest.approx(_NATIVE_NAMED_FACTOR, abs=1e-4) == LE_TO_ET_FACTOR
     # and is exactly 1000x the literal native convert_le_to_et factor (m/day).
     native_literal = _NATIVE_SECONDS_PER_DAY / (_NATIVE_WATER_DENSITY * _NATIVE_LATENT_HEAT)
-    assert LE_TO_ET_FACTOR == pytest.approx(native_literal * 1000.0, rel=1e-12)
+    assert pytest.approx(native_literal * 1000.0, rel=1e-12) == LE_TO_ET_FACTOR
 
 
 def test_parity_cos_equals_native_intent_on_full_csv():

@@ -478,7 +478,7 @@ def test_parity_against_real_native_handler_if_available():
     importable in this environment — the inline reimplementation above is then
     the authoritative spec.
     """
-    JRCWaterHandler = _import_native_handler()
+    JRCWaterHandler = _import_native_handler()  # noqa: N806 — holds the native class
     if JRCWaterHandler is None:
         pytest.skip("SYMFLUENCE native jrc_water handler not importable here")
 

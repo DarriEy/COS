@@ -340,8 +340,8 @@ def test_parity_unit_factor_is_exactly_one_hundredth():
 
     assert PERCENT_TO_FRACTION == 100.0
     # spot-check the canonical mapping the connector applies at the boundary.
-    assert 50.0 / PERCENT_TO_FRACTION == pytest.approx(0.5, abs=1e-12)
-    assert 100.0 / PERCENT_TO_FRACTION == pytest.approx(1.0, abs=1e-12)
+    assert pytest.approx(0.5, abs=1e-12) == 50.0 / PERCENT_TO_FRACTION
+    assert pytest.approx(1.0, abs=1e-12) == 100.0 / PERCENT_TO_FRACTION
 
 
 def test_parity_fill_and_missing_map_to_quality_missing(tmp_path):

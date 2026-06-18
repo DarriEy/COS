@@ -236,7 +236,6 @@ def test_parity_lat_varying_field_within_tolerance(tmp_path):
     two reductions are genuinely different numbers (not trivially equal), then bound
     their disagreement.
     """
-    import numpy as np
 
     lats = [50.0, 51.0, 52.0]
     lons = [244.0, 245.0, 246.0]
@@ -313,7 +312,6 @@ def test_parity_fill_missing_maps_to_quality_missing(tmp_path):
     construct a month whose only in-grid cells are absent (so the folded grid is all
     NaN inside the bbox) and assert the canonical MISSING contract.
     """
-    import numpy as np
 
     from cos.core.models import QualityFlag
 

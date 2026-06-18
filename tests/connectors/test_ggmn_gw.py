@@ -10,6 +10,7 @@ from cos.connectors.ggmn_gw import GGMNGroundwaterConnector
 from cos.core.exceptions import DataFormatError
 from cos.core.models import ObservationKind, ReductionSpec, SpatialReduction
 
+
 # GGMN WellLevelMeasurement/list payload: each row carries an HTML fragment with
 # hidden inputs name="time" (ISO timestamp) and name="value_value" (metres).
 def _row(time: str, value: str) -> dict:
