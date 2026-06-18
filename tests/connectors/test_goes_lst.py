@@ -333,6 +333,55 @@ def test_native_abi_fixed_grid_geolocation(tmp_path):
     assert series.points[0].quality.value == "good"
 
 
+def test_two_dimensional_0_360_longitude_basin_mean():
+    """2-D path: a grid on the 0-360 longitude convention must reduce against a
+    request bbox given in -180..180 — mirroring the 1-D reducer's _normalize_lons.
+    """
+    times = np.array(["2024-06-15T18:00"], dtype="datetime64[ns]")
+    # Grid longitudes in 0..360 (244/245/246 == -116/-115/-114). _spec() bbox is
+    # in -180..180 (lon -116..-114); without normalization the mask would be empty.
+    lat2d, lon2d = np.meshgrid(
+        np.array([50.0, 51.0, 52.0]),
+        np.array([244.0, 245.0, 246.0]),
+        indexing="ij",
+    )
+    lst = np.full((1, 3, 3), 295.0)
+    conn = GOESLSTConnector()
+    series = conn.reduce_arrays(
+        lat2d, lon2d, times, lst, _spec(),
+        start=datetime(2024, 1, 1, tzinfo=UTC), end=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    assert series.reduction == SpatialReduction.BASIN_MEAN
+    assert series.points[0].value == pytest.approx(295.0, abs=1e-6)
+
+
+def test_two_dimensional_nearest_cell_great_circle_seam():
+    """nearest_cell uses great-circle distance: a cell across the 0/360 seam that
+    is geographically closer wins over a planar-closer cell.
+    """
+    times = np.array(["2024-06-15T18:00"], dtype="datetime64[ns]")
+    # Point at lon 0. Cell A at 10E (10 deg away); cell B at 355E (== -5, only 5
+    # deg away). Planar |0-355| would pick A; great-circle picks the nearer B.
+    lat2d, lon2d = np.meshgrid(
+        np.array([51.0]),
+        np.array([10.0, 355.0]),
+        indexing="ij",
+    )
+    lst = np.full((1, 1, 2), 280.0)
+    lst[0, 0, 1] = 305.0  # the across-seam, geographically nearest cell
+    conn = GOESLSTConnector()
+    spec = ReductionSpec(
+        domain_name="seam", bbox=(50.0, -1.0, 52.0, 1.0),
+        centroid=(51.0, 0.0), area_km2=500.0,  # small -> nearest_cell
+    )
+    series = conn.reduce_arrays(
+        lat2d, lon2d, times, lst, spec,
+        start=datetime(2024, 1, 1, tzinfo=UTC), end=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    assert series.reduction == SpatialReduction.NEAREST_CELL
+    assert series.points[0].value == pytest.approx(305.0, abs=1e-6)
+
+
 def test_anonymous_no_auth_spec():
     """Spec contract: AWS NODD is open data -> connector requires no auth provider."""
     conn = GOESLSTConnector()

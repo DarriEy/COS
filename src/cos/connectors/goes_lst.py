@@ -297,11 +297,16 @@ class GOESLSTConnector(BaseObservationConnector):
         ABI cells carry non-finite lat/lon; the bbox mask requires finite coords so
         they drop out. ``basin_mean`` is the cos-lat-weighted mean over the bbox
         cells; ``nearest_cell`` is the nearest valid in-grid cell to the centroid.
+
+        Longitude convention is reconciled with the 1-D reducer: the request bbox
+        is shifted into the grid's 0–360 convention (:func:`_normalize_lons`), and
+        nearest-cell uses a great-circle (haversine) distance, which is accurate at
+        high latitude / the disk edge and seam-robust across the 0/360 meridian.
         """
         import numpy as np
 
         from cos.core.models import QualityFlag
-        from cos.core.reduce import _as_datetime
+        from cos.core.reduce import _as_datetime, _normalize_lons
 
         lats = np.broadcast_to(np.asarray(lats, dtype="float64"), values.shape[1:])
         lons = np.broadcast_to(np.asarray(lons, dtype="float64"), values.shape[1:])
@@ -311,6 +316,9 @@ class GOESLSTConnector(BaseObservationConnector):
             if bbox is None:
                 raise ReductionError("GOES LST basin_mean requires spec.bbox")
             lat_min, lon_min, lat_max, lon_max = bbox
+            # Normalize against only the FINITE grid lons: off-disk cells carry inf,
+            # which would poison _normalize_lons' nanmax-based 0–360 detection.
+            lon_min, lon_max = _normalize_lons(lons[finite_coord], lon_min, lon_max)
             cell_mask = (
                 finite_coord
                 & (lats >= lat_min) & (lats <= lat_max)
@@ -334,11 +342,17 @@ class GOESLSTConnector(BaseObservationConnector):
             if point is None:
                 raise ReductionError("GOES LST nearest_cell requires spec.centroid")
             plat, plon = point
-            dist = np.where(
-                finite_coord,
-                (lats - plat) ** 2 + (lons - plon) ** 2,
-                np.inf,
+            # Great-circle (haversine) distance: accurate near the disk edge / high
+            # latitude where planar degree-distance distorts, and seam-robust across
+            # the 0/360 meridian (sin(Δλ/2) is periodic), so no lon normalization is
+            # needed here. The haversine term is monotonic in distance -> argmin ok.
+            dphi = np.deg2rad(lats - plat)
+            dlam = np.deg2rad(lons - plon)
+            hav = (
+                np.sin(dphi / 2.0) ** 2
+                + np.cos(np.deg2rad(plat)) * np.cos(np.deg2rad(lats)) * np.sin(dlam / 2.0) ** 2
             )
+            dist = np.where(finite_coord, hav, np.inf)
             flat_idx = int(np.argmin(dist))
             i, j = np.unravel_index(flat_idx, dist.shape)
             series = values[:, i, j].astype("float64")
