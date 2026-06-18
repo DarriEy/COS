@@ -144,7 +144,12 @@ def _native_rows(payload: dict) -> dict[str, float]:
     (native keeps no MISSING placeholder — coerced NaNs are dropped).
     """
     import pandas as pd
-    from bs4 import BeautifulSoup
+
+    # The native GGMN handler parses the row HTML with BeautifulSoup; this parity
+    # mirror needs it too. bs4 is the native handler's dep, not a COS runtime dep
+    # (the COS connector reads the JSON record API) and not in COS's test extras,
+    # so skip the native-parity comparison when bs4 is absent (e.g. CI).
+    BeautifulSoup = pytest.importorskip("bs4").BeautifulSoup
 
     times: list[str] = []
     values: list[str] = []
