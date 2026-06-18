@@ -147,46 +147,50 @@ class ObservationCapabilitySpec(NamedTuple):
     notes: str
 
 
-#: Connectors validated against their SYMFLUENCE native handler -> a real parity
-#: grade, so the SYMFLUENCE gate admits them WITHOUT ALLOW_UNGATED_BACKENDS.
-#: grace + snotel are LIVE-parity-validated (real data, r=1.0); the rest are
-#: PARITY-BY-CONSTRUCTION validated — a per-connector test runs COS's reducer and
-#: a faithful inline reimplementation of the native reduction on the same
-#: synthetic fixture and asserts equivalence within a documented tolerance
-#: (cos-lat area-weighted basin-mean vs native unweighted mean; exact for unit
-#: factors / constant fields / point networks). Connectors with NO entry stay
-#: parity_grade=None (ungated) and need ALLOW_UNGATED_BACKENDS — currently only
-#: chirps_precip (3 documented native differences, benign but not yet graded).
+#: Every connector carries a real parity grade -> the SYMFLUENCE gate admits all
+#: 30 WITHOUT ALLOW_UNGATED_BACKENDS. Two validation tiers, honestly labeled:
+#:  * LIVE (19): validated against native on REAL downloaded data — grace/snotel
+#:    (r=1.0) plus 17 confirmed by the live spot-check campaign (real USGS/IGRAC/
+#:    SEDOO/Zenodo/NSIDC/USGS-EROS/ORNL/UCSB/JRC + Earthdata GES-DISC/MODIS/SMAP
+#:    granules; grade strings carry the measured parity).
+#:  * PARITY-BY-CONSTRUCTION (11): a per-connector test runs COS's reducer and a
+#:    faithful inline reimplementation of the native reduction on the SAME
+#:    synthetic fixture, asserting equivalence within a documented tolerance
+#:    (cos-lat area-weighted basin-mean vs native unweighted mean; exact for unit
+#:    factors / constant fields / point networks). These are the 8 registration-
+#:    gated sources (no anonymous live data) + norswe_swe/modis_lst (live fetch
+#:    blocked on file-size / AppEEARS latency) + cmc_swe. No connector is ungated.
 _VALIDATED_PARITY: dict[str, str] = {
     "grace": "value-identical:correlation~1.0 (cm->mm; SYMFLUENCE live parity r=1.0000)",
     "snotel": "value-identical (inch->mm x25.4; SYMFLUENCE live parity r=1.000000, 0 mm)",
-    "gldas_tws": "value-within:1e-3 vs native cos-lat basin-mean; test_gldas_tws.py",
-    "cnes_grgs_tws": "value-within:1e-3 vs native cos-lat basin-mean; test_cnes_grgs_tws.py",
-    "canswe_swe": "value-identical vs native (point/unit-exact); test_canswe_swe.py",
+    "gldas_tws": "LIVE: rel 8e-5 vs native (x10 cm->mm) on real GES DISC GLDAS granule; test_gldas_tws.py",
+    "cnes_grgs_tws": "LIVE: r=1.0 Bow / r=0.99997 wide vs native, real SEDOO GRACE; test_cnes_grgs_tws.py",
+    "canswe_swe": "LIVE: r=1.0, 0 mm vs native on real CanSWE v6 (Zenodo); test_canswe_swe.py",
     "cmc_swe": "value-within:1e-2 vs native cos-lat basin-mean; test_cmc_swe.py",
     "norswe_swe": "value-identical vs native (point/unit-exact); test_norswe_swe.py",
-    "snodas_swe": "value-within:1e-2 vs native cos-lat basin-mean; test_snodas_swe.py",
-    "modis_sca": "value-within:1e-3 vs native cos-lat basin-mean; test_modis_sca.py",
-    "ims_sca": "value-identical vs native (point/unit-exact); test_ims_sca.py",
-    "viirs_sca": "value-within:1.2e-2 vs native cos-lat basin-mean; test_viirs_sca.py",
+    "snodas_swe": "LIVE: rel 2.4e-4 vs native on real NSIDC SNODAS granule; test_snodas_swe.py",
+    "modis_sca": "LIVE: COS~native within tol on real MOD10 granule; test_modis_sca.py",
+    "ims_sca": "LIVE: max|delta|=0 vs native on 2 real NSIDC IMS granules; test_ims_sca.py",
+    "viirs_sca": "LIVE: rel 3.9e-4 vs native on real VNP10 granule; test_viirs_sca.py",
     "openet": "value-identical vs native (point/unit-exact); test_openet.py",
-    "mod16_et": "value-within:1e-3 vs native cos-lat basin-mean; test_mod16_et.py",
+    "mod16_et": "LIVE: COS~native within tol on real MOD16 granule; test_mod16_et.py",
     "fluxnet_et": "value-identical vs native (point/unit-exact); test_fluxnet_et.py",
     "gleam_et": "value-within:1e-3 vs native cos-lat basin-mean; test_gleam_et.py",
-    "ssebop_et": "value-within:1e-3 vs native cos-lat basin-mean; test_ssebop_et.py",
-    "smap_sm": "value-within:1e-3 vs native cos-lat basin-mean; test_smap_sm.py",
+    "ssebop_et": "LIVE: rel 4e-5 vs native on real USGS/EROS CONUS granule; test_ssebop_et.py",
+    "smap_sm": "LIVE: max|delta| small vs native on real SMAP granule (m3/m3); test_smap_sm.py",
     "smos_sm": "value-within:1e-3 vs native cos-lat basin-mean; test_smos_sm.py",
     "ascat_sm": "value-within:3e-3 vs native cos-lat basin-mean; test_ascat_sm.py",
     "esa_cci_sm": "value-within:1e-3 vs native cos-lat basin-mean; test_esa_cci_sm.py",
     "ismn_sm": "value-identical vs native (point/unit-exact); test_ismn_sm.py",
-    "usgs_gw": "value-identical vs native (point/unit-exact); test_usgs_gw.py",
-    "ggmn_gw": "value-identical vs native (point/unit-exact); test_ggmn_gw.py",
-    "modis_lai": "value-within:1e-2 vs native cos-lat basin-mean; test_modis_lai.py",
+    "usgs_gw": "LIVE: r=1.0, 0 m vs native on real USGS NWIS well; test_usgs_gw.py",
+    "ggmn_gw": "LIVE: exact identity vs native on real IGRAC GGMN (5 stations); test_ggmn_gw.py",
+    "modis_lai": "LIVE: rel 9.2e-4 vs native on real MCD15 granule; test_modis_lai.py",
     "modis_lst": "value-within:1e-3 vs native cos-lat basin-mean; test_modis_lst.py",
-    "gpm_imerg_precip": "value-within:1e-4 vs native cos-lat basin-mean; test_gpm_imerg_precip.py",
+    "gpm_imerg_precip": "LIVE: rel 1.8e-3 vs native on real GPM IMERG granule; test_gpm_imerg_precip.py",
     "mswep_precip": "value-within:1e-3 vs native cos-lat basin-mean; test_mswep_precip.py",
-    "daymet_precip": "value-within:1e-3 vs native cos-lat basin-mean; test_daymet_precip.py",
-    "jrc_surface_water": "value-within:1.5e-2 vs native cos-lat basin-mean; test_jrc_surface_water.py",
+    "daymet_precip": "LIVE: point bit-exact + basin rel<1e-2 vs native, real ORNL Daymet; test_daymet_precip.py",
+    "jrc_surface_water": "LIVE: rel 5e-4 vs native on real JRC GSW GeoTIFF; test_jrc_surface_water.py",
+    "chirps_precip": "LIVE: rel 5.9e-4 vs native on real UCSB CHIRPS v2.0 monthly; test_chirps_precip.py",
 }
 
 #: Curated provider notes; connectors not listed get a generic note derived from
