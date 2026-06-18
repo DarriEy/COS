@@ -53,6 +53,12 @@ class ObservationKind(StrEnum):
     PRECIPITATION = "precipitation"
     SURFACE_WATER = "surface_water"
     WATER_LEVEL = "water_level"
+    # Multivariate-breadth kinds (orthogonal constraints on the water-energy-
+    # carbon cycle for multi-objective model evaluation).
+    VEGETATION_INDEX = "vegetation_index"  # NDVI/EVI, dimensionless
+    ALBEDO = "albedo"                      # broadband surface albedo, dimensionless
+    SNOW_DEPTH = "snow_depth"              # physical snow depth (distinct from SWE)
+    GPP = "gpp"                            # gross primary productivity
 
 
 #: Frozen canonical SI unit per kind (design §2 unit table). The connector MUST
@@ -69,6 +75,10 @@ KIND_UNITS: dict[ObservationKind, str] = {
     ObservationKind.PRECIPITATION: "mm",
     ObservationKind.SURFACE_WATER: "fraction",
     ObservationKind.WATER_LEVEL: "m",
+    ObservationKind.VEGETATION_INDEX: "1",       # NDVI/EVI ratio (~ -1..1)
+    ObservationKind.ALBEDO: "1",                 # albedo fraction (0..1)
+    ObservationKind.SNOW_DEPTH: "m",             # physical snow depth, metres
+    ObservationKind.GPP: "gC/m2/day",            # gross primary productivity
 }
 
 #: COS kind -> SYMFLUENCE ``obs_type`` (they coincide today, but the indirection

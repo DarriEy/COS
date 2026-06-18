@@ -14,7 +14,6 @@
 # registered connector; edit the connector class attrs, not this file by hand.
 # Parity: grace + snotel are native-parity-validated (r=1.0); the rest are
 # contract/unit-validated + adversarially reviewed, pending a native-parity run.
-
 - slug: ascat_sm
   name: EUMETSAT ASCAT Surface Soil Moisture
   kind: soil_moisture
@@ -23,8 +22,7 @@
   status: implemented
   canonical_unit: "m3/m3"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: canswe_swe
   name: CanSWE (Canadian Snow Water Equivalent)
   kind: swe
@@ -33,8 +31,7 @@
   status: implemented
   canonical_unit: "mm"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: chirps_precip
   name: UCSB CHIRPS Precipitation
   kind: precipitation
@@ -43,8 +40,16 @@
   status: implemented
   canonical_unit: "mm"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
+- slug: cmc_snow_depth
+  name: CMC Daily Snow Depth Analysis (depth)
+  kind: snow_depth
+  structural_class: gridded
+  auth: earthdata
+  status: implemented
+  canonical_unit: "m"
+  notes: >-
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: cmc_swe
   name: CMC Daily Snow Depth Analysis (SWE)
   kind: swe
@@ -53,8 +58,7 @@
   status: implemented
   canonical_unit: "mm"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: cnes_grgs_tws
   name: CNES/GRGS RL05 GRACE TWS
   kind: tws
@@ -63,8 +67,7 @@
   status: implemented
   canonical_unit: "mm"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: daymet_precip
   name: ORNL Daymet Daily Precipitation
   kind: precipitation
@@ -73,8 +76,7 @@
   status: implemented
   canonical_unit: "mm"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: esa_cci_sm
   name: ESA CCI Surface Soil Moisture
   kind: soil_moisture
@@ -83,8 +85,7 @@
   status: implemented
   canonical_unit: "m3/m3"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: fluxnet_et
   name: FLUXNET / AmeriFlux flux-tower ET
   kind: et
@@ -93,8 +94,7 @@
   status: implemented
   canonical_unit: "mm/day"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: ggmn_gw
   name: IGRAC GGMN (Global Groundwater Monitoring Network)
   kind: groundwater
@@ -103,8 +103,7 @@
   status: implemented
   canonical_unit: "m"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: gldas_tws
   name: NASA GLDAS-2.1 Noah TWS
   kind: tws
@@ -113,8 +112,7 @@
   status: implemented
   canonical_unit: "mm"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: gleam_et
   name: GLEAM Evapotranspiration
   kind: et
@@ -123,8 +121,7 @@
   status: implemented
   canonical_unit: "mm/day"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: gpm_imerg_precip
   name: NASA GPM IMERG Precipitation
   kind: precipitation
@@ -133,8 +130,7 @@
   status: implemented
   canonical_unit: "mm"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: grace
   name: NASA GRACE/GRACE-FO TWS
   kind: tws
@@ -143,8 +139,16 @@
   status: implemented
   canonical_unit: "mm"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    native-parity validated (r=1.0000, cm->mm).
+    Ported to the COS canonical contract. native-parity validated (r=1.0000).
+- slug: hubeau_waterlevel
+  name: Hub'Eau Hydrometrie Water Level
+  kind: water_level
+  structural_class: point_network
+  auth: none
+  status: implemented
+  canonical_unit: "m"
+  notes: >-
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: ims_sca
   name: NOAA IMS Snow Cover (G02156)
   kind: snow_cover
@@ -153,8 +157,7 @@
   status: implemented
   canonical_unit: "fraction"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: ismn_sm
   name: ISMN In-Situ Soil Moisture
   kind: soil_moisture
@@ -163,8 +166,7 @@
   status: implemented
   canonical_unit: "m3/m3"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: jrc_surface_water
   name: JRC Global Surface Water (occurrence)
   kind: surface_water
@@ -173,8 +175,7 @@
   status: implemented
   canonical_unit: "fraction"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: mod16_et
   name: NASA MODIS MOD16A2 ET
   kind: et
@@ -183,8 +184,25 @@
   status: implemented
   canonical_unit: "mm/day"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
+- slug: modis_albedo
+  name: NASA MODIS MCD43A3 Broadband Albedo
+  kind: albedo
+  structural_class: gridded
+  auth: earthdata
+  status: implemented
+  canonical_unit: "1"
+  notes: >-
+    Ported to the COS canonical contract. contract/spec validated.
+- slug: modis_gpp
+  name: NASA MODIS MOD17A2H GPP
+  kind: gpp
+  structural_class: gridded
+  auth: earthdata
+  status: implemented
+  canonical_unit: "gC/m2/day"
+  notes: >-
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: modis_lai
   name: NASA MODIS Leaf Area Index (MCD15A2H)
   kind: lai
@@ -193,8 +211,7 @@
   status: implemented
   canonical_unit: "1"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: modis_lst
   name: NASA MODIS Land Surface Temperature (MOD11/MYD11)
   kind: lst
@@ -203,8 +220,16 @@
   status: implemented
   canonical_unit: "K"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
+- slug: modis_ndvi
+  name: NASA MODIS 16-day NDVI/EVI (MOD13A2/MOD13Q1)
+  kind: vegetation_index
+  structural_class: gridded
+  auth: earthdata
+  status: implemented
+  canonical_unit: "1"
+  notes: >-
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: modis_sca
   name: NASA MODIS Snow Cover (MOD10A1/MYD10A1)
   kind: snow_cover
@@ -213,8 +238,7 @@
   status: implemented
   canonical_unit: "fraction"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: mswep_precip
   name: GloH2O MSWEP Precipitation
   kind: precipitation
@@ -223,8 +247,7 @@
   status: implemented
   canonical_unit: "mm"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: norswe_swe
   name: NorSWE Northern-Hemisphere SWE
   kind: swe
@@ -233,8 +256,7 @@
   status: implemented
   canonical_unit: "mm"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: openet
   name: OpenET ensemble ET
   kind: et
@@ -243,8 +265,7 @@
   status: implemented
   canonical_unit: "mm/day"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: smap_sm
   name: NASA SMAP Surface Soil Moisture
   kind: soil_moisture
@@ -253,8 +274,7 @@
   status: implemented
   canonical_unit: "m3/m3"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: smos_sm
   name: ESA SMOS Surface Soil Moisture
   kind: soil_moisture
@@ -263,8 +283,7 @@
   status: implemented
   canonical_unit: "m3/m3"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: snodas_swe
   name: NOAA SNODAS Snow Water Equivalent
   kind: swe
@@ -273,8 +292,7 @@
   status: implemented
   canonical_unit: "mm"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: snotel
   name: NRCS SNOTEL (AWDB)
   kind: swe
@@ -283,8 +301,7 @@
   status: implemented
   canonical_unit: "mm"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    native-parity validated (r=1.000000, 0 mm; inch->mm).
+    Ported to the COS canonical contract. native-parity validated (r=1.0).
 - slug: ssebop_et
   name: USGS SSEBop actual ET
   kind: et
@@ -293,8 +310,16 @@
   status: implemented
   canonical_unit: "mm/day"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
+- slug: swot_wse
+  name: SWOT Water-Surface Elevation (Hydrocron)
+  kind: water_level
+  structural_class: point_network
+  auth: none
+  status: implemented
+  canonical_unit: "m"
+  notes: >-
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: usgs_gw
   name: USGS NWIS Groundwater Level
   kind: groundwater
@@ -303,8 +328,7 @@
   status: implemented
   canonical_unit: "m"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.
 - slug: viirs_sca
   name: NASA VIIRS Snow Cover (VNP10)
   kind: snow_cover
@@ -313,5 +337,4 @@
   status: implemented
   canonical_unit: "fraction"
   notes: >-
-    Ported from the SYMFLUENCE native handler to the COS canonical contract.
-    contract+unit validated; native-parity run pending.
+    Ported to the COS canonical contract. contract/spec validated.

@@ -25,6 +25,7 @@ PROVIDER_TIERS: dict[str, list[str]] = {
         "grace", "gldas_tws", "cnes_grgs_tws",
         "mod16_et", "gleam_et", "ssebop_et",
         "modis_lai", "modis_lst",
+        "modis_ndvi", "modis_gpp", "swot_wse",
     ],
     # Daily point networks + daily/near-daily gridded products.
     "daily": [
@@ -34,6 +35,7 @@ PROVIDER_TIERS: dict[str, list[str]] = {
         "usgs_gw", "ggmn_gw",
         "chirps_precip", "gpm_imerg_precip", "mswep_precip", "daymet_precip",
         "jrc_surface_water",
+        "modis_albedo", "cmc_snow_depth", "hubeau_waterlevel",
     ],
     # Keyed / per-request ensemble or tower products.
     "ondemand": ["openet", "fluxnet_et"],
