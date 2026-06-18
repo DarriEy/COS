@@ -155,27 +155,27 @@ class ObservationCapabilitySpec(NamedTuple):
 
 #: Every connector carries a real parity grade -> the SYMFLUENCE gate admits all
 #: 30 WITHOUT ALLOW_UNGATED_BACKENDS. Two validation tiers, honestly labeled:
-#:  * LIVE (24): validated against native on REAL downloaded data — grace/snotel
+#:  * LIVE (25): validated against native on REAL downloaded data — grace/snotel
 #:    + the live spot-check campaign (USGS/IGRAC/SEDOO/Zenodo/NSIDC/USGS-EROS/
 #:    ORNL/UCSB/JRC + Earthdata GES-DISC/MODIS/SMAP via netrc) + the CDS/AmeriFlux
 #:    set using the creds we hold (esa_cci/ascat/smos via ~/.cdsapirc, fluxnet via
 #:    AmeriFlux). Grade strings carry the measured parity.
-#:  * PARITY-BY-CONSTRUCTION (6): a per-connector test runs COS's reducer and a
+#:  * PARITY-BY-CONSTRUCTION (5): a per-connector test runs COS's reducer and a
 #:    faithful inline reimplementation of the native reduction on the SAME
 #:    synthetic fixture, asserting equivalence within a documented tolerance
 #:    (cos-lat area-weighted basin-mean vs native unweighted mean; exact for unit
 #:    factors / constant fields / point networks). These are gleam_et / mswep_precip
 #:    / openet / ismn_sm (registration-gated — no creds here AND no public endpoint
 #:    in the native handler either) + norswe_swe (single 2.38 GB Zenodo ZIP, no
-#:    subset) + cmc_swe (geo frontend fixed + tested; live re-validation pending a
-#:    real CMC fetch). No connector is ungated.
+#:    subset). cmc_swe is now LIVE (native-resolution reproject fixed the +30%
+#:    undersampling bias). No connector is ungated.
 _VALIDATED_PARITY: dict[str, str] = {
     "grace": "value-identical:correlation~1.0 (cm->mm; SYMFLUENCE live parity r=1.0000)",
     "snotel": "value-identical (inch->mm x25.4; SYMFLUENCE live parity r=1.000000, 0 mm)",
     "gldas_tws": "LIVE: rel 8e-5 vs native (x10 cm->mm) on real GES DISC GLDAS granule; test_gldas_tws.py",
     "cnes_grgs_tws": "LIVE: r=1.0 Bow / r=0.99997 wide vs native, real SEDOO GRACE; test_cnes_grgs_tws.py",
     "canswe_swe": "LIVE: r=1.0, 0 mm vs native on real CanSWE v6 (Zenodo); test_canswe_swe.py",
-    "cmc_swe": "value-within:1e-2 vs native cos-lat basin-mean; test_cmc_swe.py",
+    "cmc_swe": "LIVE: ~3% mean (max 5.2%) vs native on real NSIDC CMC nsidc0447 GeoTIFF; test_cmc_swe.py",
     "norswe_swe": "value-identical vs native (point/unit-exact); test_norswe_swe.py",
     "snodas_swe": "LIVE: rel 2.4e-4 vs native on real NSIDC SNODAS granule; test_snodas_swe.py",
     "modis_sca": "LIVE: COS~native within tol on real MOD10 granule; test_modis_sca.py",
