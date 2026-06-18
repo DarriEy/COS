@@ -183,7 +183,7 @@ class SNODASSWEConnector(BaseObservationConnector):
         for v in data_vars:
             low = str(v).lower()
             if "swe" in low or "snow" in low:
-                return v
+                return str(v)
         return None
 
     @staticmethod

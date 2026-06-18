@@ -121,6 +121,8 @@ class MOD16ETConnector(BaseObservationConnector):
             dims = list(da.dims)
             lat_name = next((d for d in dims if d in ("lat", "latitude", "y")), None)
             lon_name = next((d for d in dims if d in ("lon", "longitude", "x")), None)
+            lats: np.ndarray | None
+            lons: np.ndarray | None
             if lat_name is not None and lon_name is not None:
                 lats = np.asarray(ds[lat_name].values, dtype="float64")
                 lons = np.asarray(ds[lon_name].values, dtype="float64")
@@ -229,10 +231,10 @@ class MOD16ETConnector(BaseObservationConnector):
     def _pick_variable(self, ds) -> str:
         cfg_var = self.config.get("variable")
         if cfg_var and cfg_var in ds.data_vars:
-            return cfg_var
+            return str(cfg_var)
         for name in _ET_VAR_CANDIDATES:
             if name in ds.data_vars:
-                return name
+                return str(name)
         # last resort: first ET-ish, non-QC data var
         for name in ds.data_vars:
             low = str(name).lower()

@@ -178,7 +178,7 @@ class CanSWEConnector(BaseObservationConnector):
             if station_dim is None:
                 # infer the non-time dim of a 2-D SWE field
                 if swe.ndim == 2 and "time" in swe.dims:
-                    station_dim = next(d for d in swe.dims if d != "time")
+                    station_dim = str(next(d for d in swe.dims if d != "time"))
                 else:
                     raise DataFormatError(self.slug, "Cannot find a station dimension in CanSWE NetCDF")
 

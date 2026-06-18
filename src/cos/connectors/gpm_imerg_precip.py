@@ -200,7 +200,7 @@ class GPMIMERGPrecipConnector(BaseObservationConnector):
         # Fall back to any variable whose name advertises precipitation.
         for name in data_vars:
             if "precip" in str(name).lower():
-                return name
+                return str(name)
         return None
 
     def _choose_reduction(self, spec: ReductionSpec) -> SpatialReduction:

@@ -181,7 +181,7 @@ class ASCATSoilMoistureConnector(BaseObservationConnector):
         for name in data_vars:
             lower = name.lower()
             if "sm" in lower or "soil" in lower:
-                return name
+                return str(name)
         return None
 
     def _choose_reduction(self, spec: ReductionSpec) -> SpatialReduction:

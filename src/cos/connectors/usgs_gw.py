@@ -233,7 +233,7 @@ def _make_point(raw_val: object, in_feet: bool, ts_utc: datetime) -> Observation
     if raw_val is None or str(raw_val).strip() == "":
         return ObservationPoint(timestamp=ts_utc, value=None, quality=QualityFlag.MISSING)
     try:
-        val = float(raw_val)
+        val = float(str(raw_val))
     except (TypeError, ValueError):
         return ObservationPoint(timestamp=ts_utc, value=None, quality=QualityFlag.MISSING)
     if val == NWIS_NODATA:

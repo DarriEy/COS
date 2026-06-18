@@ -121,7 +121,7 @@ class IMSSnowCoverConnector(BaseObservationConnector):
                 fractions = np.asarray(da.values, dtype="float64")
                 points = self.fraction_series(times, fractions)
             else:
-                grid_var = self._find_code_var(list(ds.data_vars))
+                grid_var = self._find_code_var([str(v) for v in ds.data_vars])
                 if grid_var is None:
                     raise ConnectorError(
                         self.slug,

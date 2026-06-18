@@ -131,6 +131,7 @@ module = [
     "pandas", "pandas.*",
     "xarray", "xarray.*",
     "netCDF4", "netCDF4.*",
+    "rasterio", "rasterio.*",
     "symfluence", "symfluence.*",
 ]
 ignore_missing_imports = true

@@ -171,7 +171,7 @@ class SMAPSoilMoistureConnector(BaseObservationConnector):
         for name in data_vars:
             lower = name.lower()
             if "soil_moisture" in lower or "sm_surface" in lower or "sm_rootzone" in lower:
-                return name
+                return str(name)
         return None
 
     def _choose_reduction(self, spec: ReductionSpec) -> SpatialReduction:

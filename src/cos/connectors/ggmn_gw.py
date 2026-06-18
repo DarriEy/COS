@@ -127,7 +127,7 @@ class GGMNGroundwaterConnector(BaseObservationConnector):
         path = f"/groundwater/record/{gid}/WellLevelMeasurement/list"
         resp = await self._get(path, headers={"User-Agent": "Mozilla/5.0"})
         try:
-            return resp.json()
+            return dict(resp.json())
         except ValueError as exc:
             raise DataFormatError(self.slug, f"station {gid}: list endpoint not JSON: {exc}") from exc
 

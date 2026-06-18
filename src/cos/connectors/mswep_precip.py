@@ -166,7 +166,7 @@ class MSWEPPrecipConnector(BaseObservationConnector):
         for name in data_vars:
             lower = name.lower()
             if "precip" in lower or lower in ("pr", "tp", "p"):
-                return name
+                return str(name)
         return None
 
     def _choose_reduction(self, spec: ReductionSpec) -> SpatialReduction:

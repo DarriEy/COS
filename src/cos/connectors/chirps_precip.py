@@ -164,9 +164,9 @@ class CHIRPSPrecipitationConnector(BaseObservationConnector):
                 return name
         # Fall back to any variable whose name advertises precipitation / rain.
         for name in data_vars:
-            lower = name.lower()
+            lower = str(name).lower()
             if "precip" in lower or "rain" in lower:
-                return name
+                return str(name)
         return None
 
     def _choose_reduction(self, spec: ReductionSpec) -> SpatialReduction:

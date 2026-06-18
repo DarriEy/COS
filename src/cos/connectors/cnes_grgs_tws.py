@@ -250,7 +250,8 @@ def parse_grids(path: Path):
     else:
         files = [path]
 
-    ref_lats = ref_lons = None
+    ref_lats: np.ndarray | None = None
+    ref_lons: np.ndarray | None = None
     times: list[datetime] = []
     layers: list = []
     for f in files:
@@ -258,7 +259,7 @@ def parse_grids(path: Path):
         if ts is None:
             raise DataFormatError("cnes_grgs_tws", f"Cannot parse date from filename: {f.name}")
         lats, lons, grid = parse_one_grid(f.read_text())
-        if ref_lats is None:
+        if ref_lats is None or ref_lons is None:
             ref_lats, ref_lons = lats, lons
         elif not (np.array_equal(lats, ref_lats) and np.array_equal(lons, ref_lons)):
             raise DataFormatError(

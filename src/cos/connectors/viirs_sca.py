@@ -191,7 +191,7 @@ class VIIRSSnowCoverConnector(BaseObservationConnector):
     def _find_name(container, candidates) -> str | None:
         for name in candidates:
             if name in container:
-                return name
+                return str(name)
         return None
 
     def _choose_reduction(self, spec: ReductionSpec) -> SpatialReduction:

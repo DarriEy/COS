@@ -181,12 +181,12 @@ class ISMNSoilMoistureConnector(BaseObservationConnector):
 
         scale = 0.01 if is_percent else 1.0
         points: list[ObservationPoint] = []
-        for ts, val in rows:
-            if val is None:
+        for ts, raw_val in rows:
+            if raw_val is None:
                 points.append(ObservationPoint(timestamp=ts, value=None, quality=QualityFlag.MISSING))
             else:
                 points.append(
-                    ObservationPoint(timestamp=ts, value=val * scale, quality=QualityFlag.GOOD)
+                    ObservationPoint(timestamp=ts, value=raw_val * scale, quality=QualityFlag.GOOD)
                 )
         return points
 

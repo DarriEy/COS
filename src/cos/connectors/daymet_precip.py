@@ -173,7 +173,7 @@ class DaymetPrecipitationConnector(BaseObservationConnector):
         for name in data_vars:
             lower = name.lower()
             if "prcp" in lower or "precip" in lower:
-                return name
+                return str(name)
         return None
 
     def _choose_reduction(self, spec: ReductionSpec) -> SpatialReduction:

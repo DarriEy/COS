@@ -130,7 +130,7 @@ class NorSWEConnector(BaseObservationConnector):
                 # Infer the non-time dim of the 2-D SWE variable.
                 swe_dims = ds[swe_var].dims
                 if "time" in swe_dims and len(swe_dims) == 2:
-                    station_dim = next(d for d in swe_dims if d != "time")
+                    station_dim = str(next(d for d in swe_dims if d != "time"))
             if station_dim is None:
                 raise DataFormatError(self.slug, f"Could not identify station dimension in {nc_path.name}")
 
@@ -199,7 +199,7 @@ class NorSWEConnector(BaseObservationConnector):
         in_box = (
             (lats >= lat_lo) & (lats <= lat_hi) & (lons >= lon_lo) & (lons <= lon_hi)
         )
-        return np.where(in_box)[0].tolist()
+        return [int(i) for i in np.where(in_box)[0]]
 
     def _nc_path(self) -> Path:
         raw = self.config.get("nc_path") or self.config.get("path")
@@ -229,7 +229,7 @@ _MAX_DT = datetime(9999, 12, 31, tzinfo=UTC)
 def _first_present(ds, names) -> str | None:
     for n in names:
         if n in ds:
-            return n
+            return str(n)
     return None
 
 
@@ -281,7 +281,7 @@ def _to_utc(value) -> datetime | None:
         return None
     if ts is pd.NaT or (isinstance(value, float) and np.isnan(value)):
         return None
-    dt = ts.to_pydatetime()
+    dt: datetime = ts.to_pydatetime()
     return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
 
 
