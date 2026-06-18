@@ -107,7 +107,7 @@ class CMCSnowSWEConnector(BaseObservationConnector):
         """Read a CMC GeoTIFF/NetCDF, extract arrays, reduce + canonicalize."""
         suffix = path.suffix.lower()
         if suffix in (".tif", ".tiff"):
-            lats, lons, times, depth_cm = self._read_geotiff(path)
+            lats, lons, times, depth_cm = self._read_geotiff(path, start, end)
         else:
             lats, lons, times, depth_cm = self._read_netcdf(path)
         return self.reduce_arrays(lats, lons, times, depth_cm, spec, start, end)
@@ -129,7 +129,7 @@ class CMCSnowSWEConnector(BaseObservationConnector):
             depth_cm = np.asarray(da.values, dtype="float64")  # (time, lat, lon)
         return lats, lons, times, depth_cm
 
-    def _read_geotiff(self, path: Path):
+    def _read_geotiff(self, path: Path, start: datetime | None = None, end: datetime | None = None):
         """Read a yearly multi-band CMC GeoTIFF → (lats, lons, times, depth_cm).
 
         Band ``b`` (1-based) is day-of-year ``b`` of ``year`` (from the filename).
@@ -137,6 +137,7 @@ class CMCSnowSWEConnector(BaseObservationConnector):
         derived from the raster transform (reprojected to EPSG:4326 if needed).
         """
         import re
+        from datetime import timedelta
 
         import numpy as np
         import rasterio
@@ -147,23 +148,45 @@ class CMCSnowSWEConnector(BaseObservationConnector):
             raise ConnectorError(self.slug, f"Cannot extract year from filename {path.name!r}")
         year = int(m.group(1))
 
+        def _band_date(b0: int) -> np.datetime64:
+            return np.datetime64((datetime(year, 1, 1) + timedelta(days=b0)).strftime("%Y-%m-%d"))
+
+        def _day(dt: datetime | None):
+            return None if dt is None else np.datetime64(dt.strftime("%Y-%m-%d"))
+
         with rasterio.open(path) as src:
             nodata = src.nodata
+            # Read ONLY the bands whose day-of-year date is in [start, end] (a
+            # day-level superset of the half-open window reduce_arrays trims
+            # precisely later) — bounds reprojection memory to the period rather
+            # than warping all 365/366 bands. Fall back to all bands when no
+            # window is given or none intersect this file's year.
+            s_day, e_day = _day(start), _day(end)
+            sel = [
+                b0 + 1 for b0 in range(src.count)
+                if (s_day is None or _band_date(b0) >= s_day) and (e_day is None or _band_date(b0) <= e_day)
+            ]
+            if not sel:
+                sel = list(range(1, src.count + 1))
+            sel_dates = [_band_date(b - 1) for b in sel]
+
             if src.crs is not None and not src.crs.is_geographic:
-                # The CMC product is Polar Stereographic: lat/lon vary in 2D and
-                # CANNOT be factored into 1D axes by warping a single row/column
-                # (that produced physically-wrong axes and dropped every real NH
-                # bbox). Reproject the whole raster onto a REGULAR EPSG:4326 grid
-                # so lat/lon are true 1D axes that reduce_grid can consume.
+                # CMC is Polar Stereographic: lat/lon vary in 2D and cannot be
+                # factored into 1D axes by warping a single row/column. Reproject
+                # to a REGULAR EPSG:4326 grid. calculate_default_transform's DEFAULT
+                # picks a coarse global grid (~0.37 deg at mid-NH) that undersamples
+                # a basin by ~30%; force the dst pixel size to the source's native
+                # resolution (deg) so the basin is sampled at native fidelity.
                 dst_crs = "EPSG:4326"
+                res_deg = abs(src.transform.a) / 111_320.0
                 dst_transform, dst_w, dst_h = calculate_default_transform(
-                    src.crs, dst_crs, src.width, src.height, *src.bounds
+                    src.crs, dst_crs, src.width, src.height, *src.bounds, resolution=res_deg,
                 )
-                data = np.full((src.count, dst_h, dst_w), np.nan, dtype="float64")
-                for b in range(src.count):
+                data = np.full((len(sel), dst_h, dst_w), np.nan, dtype="float64")
+                for i, b in enumerate(sel):
                     reproject(
-                        source=rasterio.band(src, b + 1),
-                        destination=data[b],
+                        source=rasterio.band(src, b),
+                        destination=data[i],
                         src_transform=src.transform, src_crs=src.crs,
                         dst_transform=dst_transform, dst_crs=dst_crs,
                         src_nodata=nodata, dst_nodata=np.nan,
@@ -171,7 +194,7 @@ class CMCSnowSWEConnector(BaseObservationConnector):
                     )
                 transform, rows, cols = dst_transform, dst_h, dst_w
             else:
-                data = src.read().astype("float64")  # (bands, rows, cols)
+                data = src.read(sel).astype("float64")  # only the selected bands
                 transform, rows, cols = src.transform, src.height, src.width
 
             # Cell-center lon/lat for each row/col on the (now-regular) grid.
@@ -183,18 +206,7 @@ class CMCSnowSWEConnector(BaseObservationConnector):
         if nodata is not None:
             data[data == nodata] = np.nan
 
-        # Day-of-year per band → timestamps for this year.
-        from datetime import timedelta
-
-        times = np.array(
-            [
-                np.datetime64(
-                    (datetime(year, 1, 1) + timedelta(days=int(b))).strftime("%Y-%m-%d")
-                )
-                for b in range(data.shape[0])
-            ],
-            dtype="datetime64[ns]",
-        )
+        times = np.array(sel_dates, dtype="datetime64[ns]")
         return lats, lons, times, data
 
     # -- the architecture-critical, hermetically-tested core -----------------
