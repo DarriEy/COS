@@ -47,13 +47,19 @@ from cos.core.models import KIND_TO_SYMFLUENCE_OBS_TYPE, ObservationKind, Observ
 if TYPE_CHECKING:
     import pandas as pd
 
-# Defensive resolution of the SYMFLUENCE base class.
-try:  # pragma: no cover - exercised only with SYMFLUENCE present
-    from symfluence.data.observation.base import BaseObservationHandler as _Base
+# Detect SYMFLUENCE WITHOUT importing it. Importing a symfluence submodule here
+# triggers SYMFLUENCE's plugin-discovery bootstrap mid-import, which re-enters
+# this still-partially-built module (register() not yet defined) and logs a
+# spurious "circular import" plugin-load skip. find_spec only LOCATES the package
+# (no execution), so it is reentry-safe; the actual symfluence imports happen
+# lazily inside register() / observation_capabilities(), after this module is
+# fully initialized. No SYMFLUENCE base class is needed — CommunityObservationBackend
+# is a standalone protocol-conforming class, not a handler subclass.
+import importlib.util as _ilu
 
-    HAVE_SYMFLUENCE = True
-except Exception:  # noqa: BLE001
-    _Base = object  # type: ignore[assignment, misc]
+try:  # pragma: no cover - trivial
+    HAVE_SYMFLUENCE = _ilu.find_spec("symfluence") is not None
+except (ImportError, ValueError):  # pragma: no cover
     HAVE_SYMFLUENCE = False
 
 #: The contract version this backend targets (hardcoded so a SYMFLUENCE-side
