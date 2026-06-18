@@ -149,7 +149,7 @@ def _native_rows(payload: dict) -> dict[str, float]:
     # mirror needs it too. bs4 is the native handler's dep, not a COS runtime dep
     # (the COS connector reads the JSON record API) and not in COS's test extras,
     # so skip the native-parity comparison when bs4 is absent (e.g. CI).
-    BeautifulSoup = pytest.importorskip("bs4").BeautifulSoup
+    BeautifulSoup = pytest.importorskip("bs4").BeautifulSoup  # noqa: N806 — class alias
 
     times: list[str] = []
     values: list[str] = []
