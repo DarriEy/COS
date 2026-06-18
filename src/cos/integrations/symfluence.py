@@ -147,38 +147,81 @@ class ObservationCapabilitySpec(NamedTuple):
     notes: str
 
 
-#: The providers the COS backend claims, one per IMPLEMENTED connector. Parity
-#: grade is None for all three — they are unit/contract-validated and (SNOTEL)
-#: live-smoked, NOT yet native-parity-gated (design §6). None means the
-#: SYMFLUENCE parity gate refuses them unless ALLOW_UNGATED_BACKENDS: true.
-OBSERVATION_CAPABILITIES: tuple[ObservationCapabilitySpec, ...] = (
-    ObservationCapabilitySpec(
-        provider_id="grace",
-        kind=ObservationKind.TWS,
-        structural_class="gridded",
-        auth=frozenset({"earthdata"}),
-        parity_grade=None,
-        notes="GRACE/GRACE-FO TWS, basin-mean / nearest-cell reduction, cm→mm anomaly. "
-              "Ungated: not yet compared to the native grace.py processed CSV.",
-    ),
-    ObservationCapabilitySpec(
-        provider_id="snotel",
-        kind=ObservationKind.SWE,
-        structural_class="point_network",
-        auth=frozenset(),
-        parity_grade=None,
-        notes="NRCS SNOTEL SWE, anonymous AWDB report CSV, inches→mm. Live-smoked; "
-              "ungated (native snotel.py keeps inches, COS delivers mm — parity TBD).",
-    ),
-    ObservationCapabilitySpec(
-        provider_id="openet",
-        kind=ObservationKind.ET,
-        structural_class="flux_tower",
-        auth=frozenset({"openet"}),
-        parity_grade=None,
-        notes="OpenET ensemble ET, keyed API, mm/period→mm/day. Ungated.",
-    ),
-)
+#: Connectors validated against their SYMFLUENCE native handler by an exact
+#: parity run -> a real parity grade, so the SYMFLUENCE gate admits them WITHOUT
+#: ALLOW_UNGATED_BACKENDS. Everything else stays parity_grade=None (ungated:
+#: contract/unit-validated + adversarially reviewed, but no native-parity run
+#: yet) and the gate refuses it unless ALLOW_UNGATED_BACKENDS: true.
+_VALIDATED_PARITY: dict[str, str] = {
+    "grace": "value-identical:correlation~1.0 (cm->mm; SYMFLUENCE GRACE TWS parity r=1.0000)",
+    "snotel": "value-identical (inch->mm x25.4; SYMFLUENCE SNOTEL parity r=1.000000, max |delta|=0 mm)",
+}
+
+#: Curated provider notes; connectors not listed get a generic note derived from
+#: their kind/slug. (The three original connectors keep their specific notes.)
+_CAP_NOTES: dict[str, str] = {
+    "grace": "GRACE/GRACE-FO TWS, basin-mean / nearest-cell reduction, cm->mm anomaly. "
+             "Validated == native grace.py reduction (r=1.0000).",
+    "snotel": "NRCS SNOTEL SWE, anonymous AWDB report CSV, inches->mm. Validated == native "
+              "snotel.py for Paradise #679 (r=1.0, 0 mm delta).",
+    "openet": "OpenET ensemble ET, keyed API, mm/period->mm/day. Ungated (needs an OpenET key).",
+}
+
+
+def _build_observation_capabilities() -> tuple[ObservationCapabilitySpec, ...]:
+    """Derive the claimed-provider specs from the registered COS connectors.
+
+    Every connector declares ``slug`` / ``kind`` / ``structural_class`` / ``auth``
+    as class attributes, so the SYMFLUENCE-facing capability list is generated
+    from the connector registry rather than hand-maintained — it auto-covers each
+    connector as it lands. Validated connectors carry a real parity grade
+    (:data:`_VALIDATED_PARITY`); the rest are ungated (parity_grade=None). Uses
+    only COS internals, so ``import cos`` stays SYMFLUENCE-free.
+    """
+    from cos.core.registry import discover, get_connector, list_providers
+
+    discover()  # idempotent; imports connector modules so the registry is populated
+    specs: list[ObservationCapabilitySpec] = []
+    for slug in list_providers():
+        cls = get_connector(slug)
+        kind = cls.kind
+        specs.append(
+            ObservationCapabilitySpec(
+                provider_id=slug,
+                kind=kind,
+                structural_class=getattr(cls, "structural_class", "gridded"),
+                auth=getattr(cls, "auth", frozenset()),
+                parity_grade=_VALIDATED_PARITY.get(slug),
+                notes=_CAP_NOTES.get(
+                    slug,
+                    f"{kind.value} via COS connector '{slug}', ported from the SYMFLUENCE "
+                    "native handler (reduction + units mirror native). Ungated pending a "
+                    "native-parity run; serve with ALLOW_UNGATED_BACKENDS: true.",
+                ),
+            )
+        )
+    return tuple(specs)
+
+
+#: Lazily-built cache of the claimed-provider specs. Built on first access
+#: (NOT at import) so the integration module finishes importing — defining
+#: register() — before discover() pulls in the connector import chain, which
+#: would otherwise re-enter this partially-initialized module (circular import).
+_OBSERVATION_CAPABILITIES_CACHE: tuple[ObservationCapabilitySpec, ...] | None = None
+
+
+def observation_capabilities() -> tuple[ObservationCapabilitySpec, ...]:
+    """All providers the COS backend claims (one per registered connector), cached."""
+    global _OBSERVATION_CAPABILITIES_CACHE
+    if _OBSERVATION_CAPABILITIES_CACHE is None:
+        _OBSERVATION_CAPABILITIES_CACHE = _build_observation_capabilities()
+    return _OBSERVATION_CAPABILITIES_CACHE
+
+
+def __getattr__(name: str):  # PEP 562: lazy module attribute
+    if name == "OBSERVATION_CAPABILITIES":
+        return observation_capabilities()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _backend_contract() -> Any:  # pragma: no cover - symfluence-only
@@ -231,7 +274,7 @@ class CommunityObservationBackend:
                 parity_grade=spec.parity_grade,
                 notes=spec.notes,
             )
-            for spec in OBSERVATION_CAPABILITIES
+            for spec in observation_capabilities()
         )
 
     def acquire(self, request: Any) -> Any:  # pragma: no cover - exercised by integration tests
@@ -243,9 +286,10 @@ class CommunityObservationBackend:
         errors = _backend_errors()
 
         provider_key = str(request.provider_id).strip().lower()
-        spec_match = next((s for s in OBSERVATION_CAPABILITIES if s.provider_id == provider_key), None)
+        caps = observation_capabilities()
+        spec_match = next((s for s in caps if s.provider_id == provider_key), None)
         if spec_match is None:
-            served = sorted(s.provider_id for s in OBSERVATION_CAPABILITIES)
+            served = sorted(s.provider_id for s in caps)
             raise errors.DatasetUnsupported(
                 f"The COS observation backend does not serve provider "
                 f"'{request.provider_id}' (served: {served})",

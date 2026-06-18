@@ -65,15 +65,22 @@ def test_canonical_columns_match_symfluence_standard_columns():
     assert canonical_columns_for_kind(ObservationKind.SOIL_MOISTURE) == ["datetime", "value", "depth_m", "quality_flag"]
 
 
-def test_capabilities_declare_only_implemented_nonstreamflow_kinds():
+def test_capabilities_declare_registered_nonstreamflow_connectors():
+    # One capability per registered COS connector (the list is derived from the
+    # connector registry, so it tracks the build-out automatically).
+    from cos.core.registry import discover, list_providers
+
+    discover()
     provider_ids = {s.provider_id for s in OBSERVATION_CAPABILITIES}
-    assert provider_ids == {"grace", "snotel", "openet"}
+    assert provider_ids == set(list_providers())
+    # The core kinds are present; streamflow is NEVER claimed (that is CSFS's).
     kinds = {s.kind for s in OBSERVATION_CAPABILITIES}
-    assert ObservationKind.SWE in kinds and ObservationKind.TWS in kinds and ObservationKind.ET in kinds
-    # No streamflow — that is CSFS's.
+    assert {ObservationKind.TWS, ObservationKind.SWE, ObservationKind.ET} <= kinds
     assert all(s.kind.value != "streamflow" for s in OBSERVATION_CAPABILITIES)
-    # All ungated at scaffold time (no native parity yet) — honest.
-    assert all(s.parity_grade is None for s in OBSERVATION_CAPABILITIES)
+    # Parity-validated connectors carry a real grade (admitted without the
+    # ALLOW_UNGATED waiver); the rest stay ungated (None) pending a native run.
+    graded = {s.provider_id for s in OBSERVATION_CAPABILITIES if s.parity_grade}
+    assert {"grace", "snotel"} <= graded
 
 
 def test_import_does_not_require_symfluence():
