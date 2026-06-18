@@ -22,6 +22,7 @@ from cos.core.models import (
     SpatialReduction,
 )
 from cos.integrations.symfluence import (
+    _LICENSE_POSTURE,
     OBSERVATION_CAPABILITIES,
     canonical_columns_for_kind,
     series_to_obs_csv_v1_frame,
@@ -83,6 +84,58 @@ def test_capabilities_declare_registered_nonstreamflow_connectors():
     assert {"grace", "snotel"} <= graded
 
 
+def test_every_connector_has_an_explicit_license_posture():
+    # Roster integrity: nothing ships unscoped. Every registered connector must
+    # carry an explicit posture entry (mirrors the tier / grade integrity gates),
+    # so a new connector cannot silently default to UNKNOWN.
+    from cos.core.registry import discover, list_providers
+
+    discover()
+    registered = set(list_providers())
+    missing = sorted(registered - set(_LICENSE_POSTURE))
+    assert not missing, f"connectors with no license posture: {missing}"
+    ghosts = sorted(set(_LICENSE_POSTURE) - registered)
+    assert not ghosts, f"license posture references unregistered connectors: {ghosts}"
+    # Postures use the contract's redistribution vocabulary.
+    bad = sorted(s for s, (r, *_rest) in _LICENSE_POSTURE.items()
+                 if r not in {"open", "attribution", "restricted", "unknown"})
+    assert not bad, f"connectors with invalid redistribution posture: {bad}"
+
+
+def test_restricted_sources_are_labeled_for_the_gate():
+    # The license-scoping pass found exactly these no-third-party-redistribution
+    # sources; the SYMFLUENCE gate refuses to MIRROR them via COS (users fetch
+    # them natively). cmc_swe was native-parity-validated but still may not be
+    # re-served — the whole point of the scoping.
+    restricted = {s for s, (r, *_rest) in _LICENSE_POSTURE.items() if r == "restricted"}
+    assert restricted == {"cmc_swe", "cmc_snow_depth", "ismn_sm"}
+    # ...and they propagate onto the derived capability specs.
+    caps = {s.provider_id: s for s in OBSERVATION_CAPABILITIES}
+    assert caps["cmc_swe"].redistribution == "restricted"
+    assert caps["cmc_swe"].attribution  # CMC citation propagated even though refused
+
+
+def test_noncommercial_is_orthogonal_to_redistribution():
+    # CC-BY-NC / OpenET / GLEAM are REDISTRIBUTABLE WITH ATTRIBUTION but
+    # non-commercial — surfaced as a warning, NOT refused. They must NOT be marked
+    # 'restricted' (that would wrongly block a redistributable source).
+    nc = {s for s, (_r, _dl, _a, ncf) in _LICENSE_POSTURE.items() if ncf}
+    assert {"mswep_precip", "gleam_et", "openet"} <= nc
+    for slug in ("mswep_precip", "gleam_et", "openet"):
+        r, _dl, attribution, ncf = _LICENSE_POSTURE[slug]
+        assert r == "attribution" and ncf is True and attribution
+
+
+def test_attribution_sources_carry_attribution_text():
+    # Every attribution / restricted source must propagate a non-empty attribution
+    # string (open/CC0 sources require none).
+    for slug, (r, _dl, attribution, _nc) in _LICENSE_POSTURE.items():
+        if r in {"attribution", "restricted"}:
+            assert attribution, f"{slug}: {r} posture must carry attribution text"
+        if r == "open":
+            assert attribution == "", f"{slug}: open posture should require no attribution"
+
+
 def test_import_does_not_require_symfluence():
     # The module must import whether or not symfluence is present.
     import cos.integrations.symfluence as integ
@@ -117,3 +170,21 @@ def test_backend_interface_version_compatible():
     import cos.integrations.symfluence as integ
 
     assert contract.is_compatible(integ.TARGET_INTERFACE_VERSION)
+
+
+def test_capabilities_propagate_license_posture_to_contract():
+    contract = pytest.importorskip("symfluence.data.backends.contract")
+    import cos.integrations.symfluence as integ
+
+    caps = {c.provider_id: c for c in integ.CommunityObservationBackend().capabilities()}
+    # Restricted CMC: maps onto the contract's hard-refusal enum.
+    assert caps["cmc_swe"].redistribution == contract.Redistribution.RESTRICTED
+    assert caps["cmc_swe"].noncommercial is True
+    assert caps["cmc_swe"].attribution
+    # Open NASA source: OPEN, no attribution required.
+    assert caps["grace"].redistribution == contract.Redistribution.OPEN
+    assert caps["grace"].attribution == ""
+    # Attribution + NC source: redistributable WITH attribution, NC flagged.
+    assert caps["mswep_precip"].redistribution == contract.Redistribution.ATTRIBUTION
+    assert caps["mswep_precip"].noncommercial is True
+    assert caps["mswep_precip"].attribution

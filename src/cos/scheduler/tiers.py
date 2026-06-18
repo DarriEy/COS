@@ -27,6 +27,9 @@ PROVIDER_TIERS: dict[str, list[str]] = {
         "modis_lai", "modis_lst",
         "modis_ndvi", "modis_gpp", "swot_wse",
         "swot_lake_area", "tropomi_sif", "modis_fapar",
+        # Frontier monthly products: GRACE mascon solutions, SWOT lake storage,
+        # OCO-3 SIF composites.
+        "csr_grace", "gsfc_grace", "swot_lake_storage", "oco3_sif",
     ],
     # Daily point networks + daily/near-daily gridded products.
     "daily": [
@@ -38,6 +41,9 @@ PROVIDER_TIERS: dict[str, list[str]] = {
         "jrc_surface_water",
         "modis_albedo", "cmc_snow_depth", "hubeau_waterlevel",
         "sentinel1_sm", "amsr_swe", "vodca_vod", "smap_freeze_thaw",
+        # Frontier near-daily gridded thermal/ET: GOES geostationary LST,
+        # ECOSTRESS ISS-overpass LST + ET.
+        "goes_lst", "ecostress_lst", "ecostress_et",
     ],
     # Keyed / per-request ensemble or tower products.
     "ondemand": ["openet", "fluxnet_et"],

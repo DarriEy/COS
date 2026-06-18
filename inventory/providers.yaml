@@ -401,3 +401,69 @@
   canonical_unit: "1"
   notes: >-
     Ported to the COS canonical contract. contract/spec validated.
+# Frontier connectors (next-frontier build): geostationary/ISS thermal + ET,
+# OCO-3 SIF, SWOT lake storage, CSR + GSFC GRACE mascons. Spec-validated /
+# parity-by-construction; live runs pending.
+- slug: csr_grace
+  name: CSR (UTexas) GRACE/GRACE-FO RL06 Mascon TWS
+  kind: tws
+  structural_class: gridded
+  auth: none
+  status: implemented
+  canonical_unit: "mm"
+  notes: >-
+    Reimplements the native CSR mascon GRACE reduction (cm->mm). Parity-by-construction.
+- slug: ecostress_et
+  name: ECOSTRESS L3 ET PT-JPL
+  kind: et
+  structural_class: gridded
+  auth: earthdata
+  status: implemented
+  canonical_unit: "mm/day"
+  notes: >-
+    ECOSTRESS L3 evapotranspiration (PT-JPL), mm/day. Spec validated; Earthdata live pending.
+- slug: ecostress_lst
+  name: ECOSTRESS L2 Land Surface Temperature (ECO2LSTE)
+  kind: lst
+  structural_class: gridded
+  auth: earthdata
+  status: implemented
+  canonical_unit: "K"
+  notes: >-
+    ECOSTRESS L2 LST (scaled uint -> Kelvin, fill-masked). Spec validated; Earthdata live pending.
+- slug: goes_lst
+  name: NOAA GOES-R ABI L2 Land Surface Temperature
+  kind: lst
+  structural_class: gridded
+  auth: none
+  status: implemented
+  canonical_unit: "K"
+  notes: >-
+    GOES-R ABI L2 LST (Kelvin, DQF-masked) from anonymous NOAA AWS s3. Spec validated.
+- slug: gsfc_grace
+  name: NASA GSFC GRACE/GRACE-FO Mascon TWS
+  kind: tws
+  structural_class: gridded
+  auth: earthdata
+  status: implemented
+  canonical_unit: "mm"
+  notes: >-
+    NASA GSFC mascon GRACE reduction (cm->mm). Native-parity by construction; Earthdata live pending.
+- slug: oco3_sif
+  name: OCO-3 Solar-Induced Fluorescence (OCO3_L2_Lite_SIF)
+  kind: sif
+  structural_class: gridded
+  auth: earthdata
+  status: implemented
+  canonical_unit: "mW/m2/nm/sr"
+  notes: >-
+    OCO-3 Lite SIF (fill-masked). Spec validated; Earthdata live pending.
+- slug: swot_lake_storage
+  name: SWOT Lake Storage Change (Hydrocron)
+  kind: water_storage
+  structural_class: point_network
+  auth: none
+  status: implemented
+  canonical_unit: "km3"
+  notes: >-
+    SWOT lake storage-change via anonymous Hydrocron API (km3). Spec validated; no native baseline.

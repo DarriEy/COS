@@ -151,11 +151,25 @@ class ObservationCapabilitySpec(NamedTuple):
     auth: frozenset[str]
     parity_grade: str | None
     notes: str
+    # Data-license posture (the *data* license of the SOURCE, distinct from COS's
+    # code license). Drives the SYMFLUENCE selection gate: it REFUSES to serve a
+    # ``restricted`` source through COS (mirroring is not permitted; users must
+    # fetch it natively on their own behalf), surfaces ``noncommercial`` as a
+    # warning, and propagates ``attribution`` to users. Strings here map onto
+    # ``symfluence...contract.Redistribution`` in ``capabilities()`` (kept as
+    # plain strings so this module stays SYMFLUENCE-free).
+    redistribution: str = "unknown"   # "open" | "attribution" | "restricted" | "unknown"
+    data_license: str = ""            # SPDX id / label of the SOURCE data
+    attribution: str = ""             # required attribution text to propagate; "" = none
+    noncommercial: bool = False       # True = non-commercial-use-only term (orthogonal to redistribution)
 
 
-#: Every connector (43) carries a real parity grade -> the SYMFLUENCE gate admits
-#: all of them WITHOUT ALLOW_UNGATED_BACKENDS. 35 of 43 are validated on REAL
-#: data. Validation tiers, honestly labeled in each grade string:
+#: Every connector (50) carries a real parity grade -> the SYMFLUENCE gate admits
+#: all of them WITHOUT ALLOW_UNGATED_BACKENDS (subject to the license-posture gate
+#: below: ``restricted`` sources are refused regardless of grade). 35 of 50 are
+#: validated on REAL data; the 7 frontier connectors are spec-validated /
+#: parity-by-construction with live runs pending. Validation tiers, honestly
+#: labeled in each grade string:
 #:  * LIVE (26): native-parity verified on REAL downloaded data (grace/snotel +
 #:    the live spot-check campaign + the CDS/AmeriFlux set via the creds we hold
 #:    + modis_fapar exact vs mcd15).
@@ -214,7 +228,106 @@ _VALIDATED_PARITY: dict[str, str] = {
     "modis_fapar": "LIVE: native-parity vs mcd15 FAPAR exact (0.4108) on real MCD15A2H; test_modis_fapar.py",
     "vodca_vod": "LIVE-spec: real VODCA K-band VOD (Amazon ~1.0, unpacked); test_vodca_vod.py",
     "smap_freeze_thaw": "LIVE-spec: real SMAP SPL3FTP frozen-fraction (Arctic 1.0); test_smap_freeze_thaw.py",
+    # Frontier (next-frontier build) — spec-validated / parity-by-construction;
+    # live runs pending (anon for goes/swot; Earthdata for ecostress/oco3/gsfc).
+    "goes_lst": "spec-validated: GOES-R ABI L2 LST (Kelvin, DQF-masked, anon AWS s3); no live run; test_goes_lst.py",
+    "ecostress_lst": "spec-validated: ECOSTRESS L2 LST (uint->K, fill-masked); live pending; test_ecostress_lst.py",
+    "ecostress_et": "spec-validated: ECOSTRESS L3 ET PT-JPL (mm/day); live pending; test_ecostress_et.py",
+    "oco3_sif": "spec-validated: OCO-3 Lite SIF (mW/m2/nm/sr, fill-masked); live pending; test_oco3_sif.py",
+    "swot_lake_storage": "spec-validated: SWOT lake storage via Hydrocron (anon, km3); test_swot_lake_storage.py",
+    "csr_grace": "parity-by-construction: native CSR mascon GRACE reduction (cm->mm); test_csr_grace.py",
+    "gsfc_grace": "parity-by-construction: native GSFC mascon GRACE reduction (cm->mm); test_gsfc_grace.py",
 }
+
+#: Data-license posture per connector, keyed by slug → ``(redistribution,
+#: data_license, attribution, noncommercial)``. This is the OUTPUT of the
+#: license-scoping pass (18-source-family research + per-provider verification of
+#: GLEAM / OpenET / ISMN terms). The SYMFLUENCE selection gate consumes the
+#: ``redistribution`` axis: ``restricted`` is a HARD, non-waivable refusal on a
+#: mirroring backend (COS may not redistribute that source — users fetch it
+#: natively, which is not redistribution); ``open`` / ``attribution`` are
+#: admitted (attribution propagated); ``noncommercial`` is surfaced as a warning,
+#: NOT a refusal — it is ORTHOGONAL to redistribution (per contract 0.5.0), so a
+#: CC-BY-NC source is ``attribution`` + ``noncommercial=True`` (redistributable
+#: with attribution, non-commercial), NOT ``restricted``.
+#:
+#: Verified posture (June 2026):
+#:  * RESTRICTED (no third-party redistribution): cmc_swe / cmc_snow_depth
+#:    (CMC NSIDC-0447, Gov-Canada, "not authorized to distribute further,
+#:    including any portions"); ismn_sm (ISMN T&C, "no onward distribution").
+#:  * ATTRIBUTION + non-commercial: mswep_precip (CC-BY-NC-4.0); gleam_et (free
+#:    use, commercial needs GLEAM approval); openet (redistribute with attribution,
+#:    non-commercial). All three are redistributable WITH attribution — only the
+#:    commercial-use axis is restricted, surfaced as a warning.
+#:  * NOTE on the heterogeneous USDA-NRCS/NSIDC family: snotel / ims_sca /
+#:    snodas_swe are individually US public-domain (OPEN); only the CMC members
+#:    carry the Gov-Canada no-redistribution term — applied PER-CONNECTOR here,
+#:    not the family's most-restrictive verdict.
+_OPEN_CC0 = ("open", "CC0-1.0", "", False)
+_OPEN_PD = ("open", "public-domain", "", False)
+
+_LICENSE_POSTURE: dict[str, tuple[str, str, str, bool]] = {
+    # ---- OPEN: NASA Earthdata (CC0-1.0; courtesy citation, none required) ----
+    "grace": _OPEN_CC0, "csr_grace": _OPEN_CC0, "gsfc_grace": _OPEN_CC0,
+    "gldas_tws": _OPEN_CC0, "smap_sm": _OPEN_CC0, "smap_freeze_thaw": _OPEN_CC0,
+    "modis_sca": _OPEN_CC0, "mod16_et": _OPEN_CC0, "modis_lai": _OPEN_CC0,
+    "modis_lst": _OPEN_CC0, "modis_ndvi": _OPEN_CC0, "modis_albedo": _OPEN_CC0,
+    "modis_gpp": _OPEN_CC0, "modis_fapar": _OPEN_CC0, "viirs_sca": _OPEN_CC0,
+    "gpm_imerg_precip": _OPEN_CC0, "tropomi_sif": _OPEN_CC0, "oco3_sif": _OPEN_CC0,
+    "amsr_swe": _OPEN_CC0, "ecostress_lst": _OPEN_CC0, "ecostress_et": _OPEN_CC0,
+    "swot_wse": _OPEN_CC0, "swot_lake_area": _OPEN_CC0, "swot_lake_storage": _OPEN_CC0,
+    # ---- OPEN: US public-domain (USGS / NOAA / USDA-NRCS / ORNL DAAC) ----
+    "ssebop_et": _OPEN_PD, "usgs_gw": _OPEN_PD, "goes_lst": _OPEN_PD,
+    "daymet_precip": _OPEN_PD, "snotel": _OPEN_PD, "ims_sca": _OPEN_PD,
+    "snodas_swe": _OPEN_PD,
+    # ---- OPEN: CC0 (UCSB Climate Hazards Group) ----
+    "chirps_precip": ("open", "CC0-1.0", "", False),
+    # ---- ATTRIBUTION (redistributable WITH attribution) ----
+    "canswe_swe": ("attribution", "OGL-Canada-2.0",
+                   "Contains information licensed under the Open Government Licence – Canada (ECCC CanSWE).", False),
+    "norswe_swe": ("attribution", "OGL-Canada-2.0",
+                   "Contains information licensed under the Open Government Licence – Canada (NorSWE).", False),
+    "sentinel1_sm": ("attribution", "Copernicus",
+                     "Contains modified Copernicus Sentinel data.", False),
+    "esa_cci_sm": ("attribution", "Copernicus-C3S/ESA-CCI",
+                   "Contains modified Copernicus Climate Change Service / ESA CCI Soil Moisture information.", False),
+    "ascat_sm": ("attribution", "Copernicus-C3S",
+                 "Contains modified Copernicus Climate Change Service information.", False),
+    "smos_sm": ("attribution", "Copernicus-C3S/ESA",
+                "Contains modified Copernicus / ESA SMOS data.", False),
+    "cnes_grgs_tws": ("attribution", "CC-BY-4.0",
+                      "CNES/GRGS GRACE solutions (CC-BY-4.0).", False),
+    "hubeau_waterlevel": ("attribution", "Etalab-2.0",
+                          "Hub'Eau / Eaufrance — Licence Ouverte / Open Licence (Etalab 2.0).", False),
+    "ggmn_gw": ("attribution", "CC-BY-4.0",
+                "IGRAC Global Groundwater Monitoring Network (GGMN), CC-BY-4.0.", False),
+    "vodca_vod": ("attribution", "CC-BY-4.0",
+                  "VODCA (Moesinger et al. 2020), CC-BY-4.0.", False),
+    "fluxnet_et": ("attribution", "CC-BY-4.0",
+                   "FLUXNET / AmeriFlux (CC-BY-4.0); cite the contributing site PI.", False),
+    "jrc_surface_water": ("attribution", "CC-BY-4.0",
+                          "European Commission JRC Global Surface Water (Pekel et al. 2016), CC-BY-4.0.", False),
+    # ---- ATTRIBUTION + NON-COMMERCIAL (redistributable WITH attribution; NC) ----
+    "mswep_precip": ("attribution", "CC-BY-NC-4.0",
+                     "MSWEP (Beck et al.), CC-BY-NC-4.0 — non-commercial use only.", True),
+    "gleam_et": ("attribution", "GLEAM-data-policy",
+                 "GLEAM (Miralles et al. 2011; Martens et al. 2017) — free use; "
+                 "commercial use requires GLEAM approval.", True),
+    "openet": ("attribution", "OpenET-ToS",
+               "OpenET (etdata.org) — redistribution requires visible source attribution; "
+               "non-commercial use only.", True),
+    # ---- RESTRICTED: no third-party redistribution (HARD, non-waivable refusal) ----
+    "cmc_swe": ("restricted", "NSIDC-0447 (Gov-Canada, research-only)",
+                "Brown & Brasnett (2010), CMC daily snow analysis, NSIDC-0447, "
+                "doi:10.5067/W9FOYWH0EQZ3 — not authorized for further distribution, including any portions.", True),
+    "cmc_snow_depth": ("restricted", "NSIDC-0447 (Gov-Canada, research-only)",
+                       "Brown & Brasnett (2010), CMC daily snow analysis, NSIDC-0447, doi:10.5067/W9FOYWH0EQZ3 "
+                       "— not authorized for further distribution, including any portions.", True),
+    "ismn_sm": ("restricted", "ISMN-T&C (registration-gated)",
+                "International Soil Moisture Network (Dorigo et al.) and contributing networks — "
+                "no onward distribution permitted per the ISMN Terms & Conditions.", False),
+}
+
 
 #: Curated provider notes; connectors not listed get a generic note derived from
 #: their kind/slug. (The three original connectors keep their specific notes.)
@@ -244,6 +357,14 @@ def _build_observation_capabilities() -> tuple[ObservationCapabilitySpec, ...]:
     for slug in list_providers():
         cls = get_connector(slug)
         kind = cls.kind
+        # Conservative default for an unscoped connector: UNKNOWN posture (the gate
+        # treats it like an ungraded parity_grade — refused on a mirroring backend
+        # unless ALLOW_UNGATED_BACKENDS). The roster-integrity test asserts every
+        # registered connector has an explicit posture entry, so this default is a
+        # safety net, never the steady state.
+        redistribution, data_license, attribution, noncommercial = _LICENSE_POSTURE.get(
+            slug, ("unknown", "", "", False)
+        )
         specs.append(
             ObservationCapabilitySpec(
                 provider_id=slug,
@@ -257,6 +378,10 @@ def _build_observation_capabilities() -> tuple[ObservationCapabilitySpec, ...]:
                     "native handler (reduction + units mirror native). Ungated pending a "
                     "native-parity run; serve with ALLOW_UNGATED_BACKENDS: true.",
                 ),
+                redistribution=redistribution,
+                data_license=data_license,
+                attribution=attribution,
+                noncommercial=noncommercial,
             )
         )
     return tuple(specs)
@@ -287,6 +412,16 @@ def _backend_contract() -> Any:  # pragma: no cover - symfluence-only
     from symfluence.data.backends import contract
 
     return contract
+
+
+def _to_redistribution(value: str, contract: Any) -> Any:  # pragma: no cover - symfluence-only
+    """Map a COS posture string onto ``contract.Redistribution`` (unknown by default)."""
+    table = {
+        "open": contract.Redistribution.OPEN,
+        "attribution": contract.Redistribution.ATTRIBUTION,
+        "restricted": contract.Redistribution.RESTRICTED,
+    }
+    return table.get(value, contract.Redistribution.UNKNOWN)
 
 
 def _backend_errors() -> Any:  # pragma: no cover - symfluence-only
@@ -332,6 +467,10 @@ class CommunityObservationBackend:
                 auth=spec.auth,
                 parity_grade=spec.parity_grade,
                 notes=spec.notes,
+                data_license=spec.data_license,
+                attribution=spec.attribution,
+                redistribution=_to_redistribution(spec.redistribution, contract),
+                noncommercial=spec.noncommercial,
             )
             for spec in observation_capabilities()
         )

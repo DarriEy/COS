@@ -1,0 +1,435 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Darri Eythorsson <dae5@hi.is>
+"""OCO-3 solar-induced fluorescence (SIF) connector (gridded, basin-reduced).
+
+OCO-3 SIF has **no** SYMFLUENCE native handler, so this connector is
+*spec-validated*: its scale, valid range, and fill semantics reproduce the
+published OCO-3 Lite SIF product spec (``OCO3_L2_Lite_SIF``, served as NetCDF
+behind NASA GES DISC / Earthdata), and the hermetic tests assert that contract on
+a synthetic fixture rather than against a native reference series. It complements
+the (also spec-validated) :mod:`cos.connectors.tropomi_sif` connector: TROPOMI SIF
+is retrieved near 740/743 nm, OCO-3 reports SIF at the 757 nm and 771 nm Fraunhofer
+windows, giving an orthogonal, finer-resolution SIF constraint over the same
+canonical ``sif`` unit.
+
+Product (OCO3_L2_Lite_SIF, GES DISC, NetCDF behind NASA Earthdata netrc):
+
+* the per-sounding SIF fields are ``SIF_757nm`` and ``SIF_771nm``, reported in
+  **W/m²/sr/µm** (radiance per unit wavelength), *not* the COS canonical ``sif``
+  unit ``mW/m²/nm/sr`` (:data:`cos.core.models.KIND_UNITS`). The boundary scale
+  converts source→canonical exactly once here:
+
+      mW/m²/nm/sr = (W → mW : ×1000) × (per-µm → per-nm : ÷1000) × W/m²/sr/µm
+
+  The two factors cancel numerically (:data:`SOURCE_SIF_SCALE` ``= 1.0``), but the
+  conversion is documented and applied at the boundary so a future product with a
+  different source unit has exactly one place to change it. To put the 757/771 nm
+  windows onto a single comparable SIF magnitude the connector also applies the
+  published daily-correction-free 740 nm reference combination
+  ``SIF_740 ≈ 0.5 * (SIF_757 + 1.5 * SIF_771)`` (the OCO-2/3 linear 740 nm proxy),
+  selectable via the ``sif_combine`` option (default), or a single named field.
+* the no-retrieval fill is ``-999999`` (:data:`SIF_FILL_VALUE`); cells / soundings
+  equal to the fill, non-finite, or outside the physical valid band
+  (:data:`VALID_SIF_RANGE`, mW/m²/nm/sr) are masked to NaN so they reduce to
+  :class:`~cos.core.models.QualityFlag.MISSING`.
+
+This connector:
+
+1. opens an OCO-3 Lite SIF NetCDF (a local cached file supplied via config
+   ``nc_path`` / ``path`` — GES DISC/Earthdata download is not wired here; the
+   reduce + canonicalize path is the proven part);
+2. extracts ``lat / lon / time`` and the SIF field(s) as numpy arrays;
+3. masks fill / out-of-range soundings, combines 757/771 nm onto a 740 nm-like
+   magnitude, applies the (identity) source→canonical scale at the boundary;
+4. reduces to the basin via :mod:`cos.core.reduce` — ``basin_mean`` (cos-lat
+   weighted) for larger basins, ``nearest_cell`` for small ones — and emits the
+   canonical ``sif`` unit ``mW/m2/nm/sr``.
+
+The OCO-3 Lite product stores SIF on **2-D** per-sounding ``(time, lat, lon)``
+coordinate arrays (orbit footprints, not a regular raster); :meth:`reduce_arrays`
+therefore carries a dedicated 2-D-coordinate reduction path (bbox cell-mask +
+cos-lat-weighted mean / nearest sounding) alongside the 1-D
+:func:`cos.core.reduce.reduce_grid` path, and normalizes any ``(lat, lon, time)``
+dim order to ``(time, lat, lon)`` before reducing (mirroring the fixes already in
+:mod:`cos.connectors.tropomi_sif` / :mod:`cos.connectors.amsr_swe`).
+
+The architecture-critical extract→mask→combine→scale→reduce→canonicalize path is
+hermetically tested via :meth:`OCO3SIFConnector.reduce_arrays` on a synthetic
+in-memory grid, with no network, no auth, and no NetCDF dependency.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import structlog
+
+from cos.connectors.base import BaseObservationConnector
+from cos.core.exceptions import ConnectorError, ReductionError
+from cos.core.models import (
+    KIND_UNITS,
+    ObservationKind,
+    ObservationPoint,
+    ObservationSeries,
+    ReductionSpec,
+    SiteRef,
+    SpatialReduction,
+)
+from cos.core.registry import register
+
+if TYPE_CHECKING:
+    import numpy as np
+    import xarray as xr
+
+logger = structlog.get_logger()
+
+#: Published OCO-3 Lite SIF fill / no-retrieval sentinel.
+SIF_FILL_VALUE = -999999.0
+#: Source→canonical scale. Source SIF fields are W/m²/sr/µm; canonical ``sif`` is
+#: mW/m²/nm/sr. (W→mW ×1000) × (per-µm→per-nm ÷1000) = 1.0, so the boundary scale
+#: is numerically the identity; written explicitly as the single conversion site.
+W_TO_MW = 1000.0
+PER_UM_TO_PER_NM = 1.0 / 1000.0
+SOURCE_SIF_SCALE = W_TO_MW * PER_UM_TO_PER_NM  # == 1.0
+#: Physical-plausibility band for SIF radiance (mW/m²/nm/sr). OCO-3 757/771 nm SIF
+#: spans roughly 0..3; a small negative tail is a legitimate retrieval artefact,
+#: so the lower bound allows mildly negative values while masking gross outliers.
+VALID_SIF_RANGE = (-2.0, 12.0)
+#: 740 nm linear combination of the OCO 757/771 nm windows (the published OCO-2/3
+#: proxy for a single comparable SIF magnitude): SIF_740 = 0.5*(SIF_757 + 1.5*SIF_771).
+SIF_771_WEIGHT = 1.5
+SIF_COMBINE_SCALE = 0.5
+#: Candidate per-window SIF variable names, in preference order (OCO3_L2_Lite_SIF).
+SIF_757_VARIABLES = ("SIF_757nm", "sif_757nm", "SIF_757", "Daily_SIF_757nm")
+SIF_771_VARIABLES = ("SIF_771nm", "sif_771nm", "SIF_771", "Daily_SIF_771nm")
+#: Candidate already-combined / single-field SIF names, in preference order.
+SIF_SINGLE_VARIABLES = ("SIF_740nm", "sif_740nm", "SIF_740", "sif", "SIF")
+#: <= this area (km²) defaults to nearest_cell; larger uses basin_mean.
+MEDIUM_BASIN_THRESHOLD_KM2 = 1000.0
+
+
+@register("oco3_sif")
+class OCO3SIFConnector(BaseObservationConnector):
+    slug = "oco3_sif"
+    display_name = "OCO-3 Solar-Induced Fluorescence (OCO3_L2_Lite_SIF)"
+    kind = ObservationKind.SIF
+    structural_class = "gridded"
+    base_url = "https://oco2.gesdisc.eosdis.nasa.gov"
+    auth = frozenset({"earthdata"})
+
+    async def list_sites(self, spec: ReductionSpec) -> list[SiteRef]:
+        """One reduced region: the basin (or its centroid sounding)."""
+        reduction = self._choose_reduction(spec)
+        return [self._site_for(spec, reduction)]
+
+    async def fetch_series(
+        self,
+        spec: ReductionSpec,
+        start: datetime,
+        end: datetime,
+    ) -> list[ObservationSeries]:
+        path = self.config.get("nc_path") or self.config.get("path")
+        if not path:
+            raise ConnectorError(
+                self.slug,
+                "OCO-3 SIF live fetch needs a cached NetCDF (config 'nc_path'/'path') — "
+                "an OCO3_L2_Lite_SIF granule. GES DISC/Earthdata download is not yet "
+                "wired; the combine + scale + reduce + canonicalize path is the proven part.",
+            )
+        return [self.reduce_file(Path(path), spec, start, end)]
+
+    # -- file reader (extract arrays, then defer to the pure core) -----------
+
+    def reduce_file(
+        self,
+        path: Path,
+        spec: ReductionSpec,
+        start: datetime,
+        end: datetime,
+    ) -> ObservationSeries:
+        """Open an OCO-3 Lite SIF NetCDF, extract arrays, then combine/scale/reduce."""
+        import numpy as np
+        import xarray as xr
+
+        combine = bool(spec.options.get("sif_combine", True))
+        with xr.open_dataset(path, mask_and_scale=False) as ds:
+            lat_name = "lat" if "lat" in ds else _coord_like(ds, "lat")
+            lon_name = "lon" if "lon" in ds else _coord_like(ds, "lon")
+            time_name = "time" if "time" in ds else _coord_like(ds, "time")
+
+            v757 = _first_present(ds, SIF_757_VARIABLES)
+            v771 = _first_present(ds, SIF_771_VARIABLES)
+            vsingle = _first_present(ds, SIF_SINGLE_VARIABLES)
+
+            if combine and v757 is not None and v771 is not None:
+                da757 = _to_time_lat_lon(ds[v757], time_name, lat_name, lon_name)
+                da771 = _to_time_lat_lon(ds[v771], time_name, lat_name, lon_name)
+                sif_757 = np.asarray(da757.values, dtype="float64")
+                sif_771 = np.asarray(da771.values, dtype="float64")
+                values = self._combine_757_771(sif_757, sif_771)
+                var_name = f"{v757}+{v771}->SIF_740"
+            elif vsingle is not None:
+                da = _to_time_lat_lon(ds[vsingle], time_name, lat_name, lon_name)
+                values = np.asarray(da.values, dtype="float64")
+                var_name = vsingle
+            else:
+                raise ConnectorError(
+                    self.slug,
+                    "NetCDF missing OCO-3 SIF variables (tried 757/771 pair "
+                    f"{SIF_757_VARIABLES}/{SIF_771_VARIABLES} and single "
+                    f"{SIF_SINGLE_VARIABLES})",
+                )
+
+            lats = np.asarray(ds[lat_name].values, dtype="float64")
+            lons = np.asarray(ds[lon_name].values, dtype="float64")
+            times = np.asarray(ds[time_name].values)
+        return self.reduce_arrays(
+            lats, lons, times, values, spec, start, end, var_name=var_name, already_combined=True
+        )
+
+    # -- the architecture-critical, hermetically-tested core -----------------
+
+    def reduce_arrays(
+        self,
+        lats: np.ndarray,
+        lons: np.ndarray,
+        times: np.ndarray,
+        sif: np.ndarray,
+        spec: ReductionSpec,
+        start: datetime,
+        end: datetime,
+        *,
+        var_name: str = "SIF_740",
+        already_combined: bool = True,
+    ) -> ObservationSeries:
+        """Mask fill/out-of-range, scale source→canonical, reduce, window-trim.
+
+        *sif* is shaped ``(time, lat, lon)`` SIF radiance in the source unit
+        (W/m²/sr/µm), either an already-combined 740 nm-like field (the default;
+        ``already_combined=True``) or a single window. Cells equal to
+        :data:`SIF_FILL_VALUE`, non-finite, or outside :data:`VALID_SIF_RANGE`
+        (evaluated in the canonical unit) become NaN and surface as MISSING; the
+        rest are multiplied by :data:`SOURCE_SIF_SCALE` (numeric identity) so the
+        canonical unit ``mW/m2/nm/sr`` is preserved inside the reduction.
+
+        Coordinate shape is honoured: 1-D ``lat``/``lon`` vectors defer to
+        :func:`cos.core.reduce.reduce_grid`; 2-D per-sounding lat/lon (the real
+        OCO-3 Lite footprint layout) take a dedicated bbox-mask reduction path.
+        """
+        import numpy as np
+
+        from cos.core.reduce import reduce_grid
+
+        lats = np.asarray(lats, dtype="float64")
+        lons = np.asarray(lons, dtype="float64")
+        values = np.asarray(sif, dtype="float64")
+
+        # Apply the source→canonical scale at the boundary (W/m²/sr/µm ->
+        # mW/m²/nm/sr; numerically the identity). Mask the fill sentinel before the
+        # finite/range test so -999999 never sneaks into the canonical band.
+        values = np.where(values == SIF_FILL_VALUE, np.nan, values * SOURCE_SIF_SCALE)
+        lo, hi = VALID_SIF_RANGE
+        invalid = ~np.isfinite(values) | (values < lo) | (values > hi)
+        values = np.where(invalid, np.nan, values)
+
+        reduction = self._choose_reduction(spec)
+        point = spec.centroid
+        bbox = spec.bbox
+        if reduction == SpatialReduction.BASIN_MEAN and bbox is None:
+            raise ReductionError("OCO-3 SIF basin_mean requires spec.bbox")
+        if reduction != SpatialReduction.BASIN_MEAN and point is None:
+            raise ReductionError("OCO-3 SIF nearest_cell requires spec.centroid")
+
+        if lats.ndim == 2 or lons.ndim == 2:
+            # Real OCO-3 Lite product: 2-D per-sounding lat/lon. reduce_grid assumes
+            # 1-D coord vectors (it indexes lat/lon axes independently), which
+            # IndexErrors on a 2-D footprint grid -> reduce over a bbox cell-mask.
+            points = self._reduce_grid_2d(lats, lons, times, values, reduction, bbox, point)
+        else:
+            points = reduce_grid(
+                lats, lons, times, values,
+                reduction=reduction, bbox=bbox, point=point,
+                kind=self.kind, unit=KIND_UNITS[self.kind],
+            )
+
+        # Window-trim, half-open UTC [start, end).
+        start_u = _utc(start)
+        end_u = _utc(end)
+        points = [p for p in points if start_u <= _utc(p.timestamp) < end_u]
+
+        return ObservationSeries(
+            provider=self.slug,
+            kind=self.kind,
+            site=self._site_for(spec, reduction),
+            reduction=reduction,
+            unit=KIND_UNITS[self.kind],
+            points=points,
+            source_info={
+                "source": "OCO-3 Lite SIF",
+                "product": "OCO3_L2_Lite_SIF",
+                "source_doi": "10.5067/NOD1DPPBCXSO",
+                "url": "https://disc.gsfc.nasa.gov/datasets/OCO3_L2_Lite_SIF_11r",
+                "variable": var_name,
+                "complements": "tropomi_sif",
+            },
+            fetched_at=datetime.now(UTC),
+        )
+
+    @staticmethod
+    def _combine_757_771(sif_757: np.ndarray, sif_771: np.ndarray) -> np.ndarray:
+        """740 nm-like SIF from the OCO 757/771 nm windows (source unit, pre-scale).
+
+        ``SIF_740 = 0.5 * (SIF_757 + 1.5 * SIF_771)`` — the published OCO-2/3 linear
+        proxy. The fill sentinel is preserved on either input so the downstream mask
+        still drops it: if either window is fill/non-finite the combined value is the
+        fill sentinel, which :meth:`reduce_arrays` then masks to MISSING.
+        """
+        import numpy as np
+
+        bad = (
+            (sif_757 == SIF_FILL_VALUE)
+            | (sif_771 == SIF_FILL_VALUE)
+            | ~np.isfinite(sif_757)
+            | ~np.isfinite(sif_771)
+        )
+        combined = SIF_COMBINE_SCALE * (sif_757 + SIF_771_WEIGHT * sif_771)
+        return np.where(bad, SIF_FILL_VALUE, combined)
+
+    def _reduce_grid_2d(
+        self,
+        lats: np.ndarray,
+        lons: np.ndarray,
+        times: np.ndarray,
+        values: np.ndarray,
+        reduction: SpatialReduction,
+        bbox: tuple[float, float, float, float] | None,
+        point: tuple[float, float] | None,
+    ) -> list[ObservationPoint]:
+        """Reduce a 2-D-coordinate (per-sounding) product to canonical points.
+
+        ``lats``/``lons`` are 2-D ``(ny, nx)`` (or broadcastable to the per-timestep
+        layer shape); ``values`` is ``(time, ny, nx)``. Off-grid soundings carry
+        non-finite lat/lon and drop out of the bbox mask. ``basin_mean`` is the
+        cos-lat-weighted mean over the in-bbox soundings; ``nearest_cell`` is the
+        nearest valid sounding to the centroid.
+        """
+        import numpy as np
+
+        from cos.core.models import QualityFlag
+        from cos.core.reduce import _as_datetime
+
+        lats = np.broadcast_to(np.asarray(lats, dtype="float64"), values.shape[1:])
+        lons = np.broadcast_to(np.asarray(lons, dtype="float64"), values.shape[1:])
+        finite_coord = np.isfinite(lats) & np.isfinite(lons)
+
+        if reduction == SpatialReduction.BASIN_MEAN:
+            if bbox is None:
+                raise ReductionError("OCO-3 SIF basin_mean requires spec.bbox")
+            lat_min, lon_min, lat_max, lon_max = bbox
+            cell_mask = (
+                finite_coord
+                & (lats >= lat_min) & (lats <= lat_max)
+                & (lons >= lon_min) & (lons <= lon_max)
+            )
+            if not cell_mask.any():
+                raise ReductionError(
+                    f"No OCO-3 soundings inside bbox {bbox} on the 2-D coordinate grid"
+                )
+            weights = np.cos(np.deg2rad(np.where(cell_mask, lats, 0.0)))
+            series = np.full(values.shape[0], np.nan, dtype="float64")
+            for t in range(values.shape[0]):
+                layer = values[t]
+                use = cell_mask & np.isfinite(layer)
+                if not use.any():
+                    continue
+                wsum = float(np.sum(weights[use]))
+                if wsum > 0:
+                    series[t] = float(np.sum(layer[use] * weights[use]) / wsum)
+        else:
+            if point is None:
+                raise ReductionError("OCO-3 SIF nearest_cell requires spec.centroid")
+            plat, plon = point
+            dist = np.where(
+                finite_coord,
+                (lats - plat) ** 2 + (lons - plon) ** 2,
+                np.inf,
+            )
+            flat_idx = int(np.argmin(dist))
+            i, j = np.unravel_index(flat_idx, dist.shape)
+            series = values[:, i, j].astype("float64")
+
+        points: list[ObservationPoint] = []
+        for t, v in zip(times, series):
+            ts = t if isinstance(t, datetime) else _as_datetime(t)
+            finite = v is not None and np.isfinite(v)
+            points.append(
+                ObservationPoint(
+                    timestamp=ts,
+                    value=float(v) if finite else None,
+                    quality=QualityFlag.GOOD if finite else QualityFlag.MISSING,
+                )
+            )
+        return points
+
+    def _choose_reduction(self, spec: ReductionSpec) -> SpatialReduction:
+        if spec.reduction is not None:
+            return spec.reduction
+        if spec.area_km2 is not None and spec.area_km2 <= MEDIUM_BASIN_THRESHOLD_KM2:
+            return SpatialReduction.NEAREST_CELL
+        return SpatialReduction.BASIN_MEAN
+
+    def _site_for(self, spec: ReductionSpec, reduction: SpatialReduction) -> SiteRef:
+        if reduction == SpatialReduction.BASIN_MEAN:
+            site_id = f"oco3_sif:domain:{spec.domain_name}"
+        else:
+            clat, clon = spec.centroid or (0.0, 0.0)
+            site_id = f"oco3_sif:cell:{clat:.3f}_{clon:.3f}"
+        lat = spec.centroid[0] if spec.centroid else None
+        lon = spec.centroid[1] if spec.centroid else None
+        return SiteRef(
+            kind="reduced_region", site_id=site_id, latitude=lat, longitude=lon,
+            name=f"OCO-3 SIF over {spec.domain_name}",
+        )
+
+
+def _utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _coord_like(ds: object, want: str) -> str:
+    for name in getattr(ds, "coords", {}):
+        if want in str(name).lower():
+            return str(name)
+    return want
+
+
+def _first_present(ds: object, names: tuple[str, ...]) -> str | None:
+    """First variable in *names* present in the dataset's data_vars, else None."""
+    data_vars = set(getattr(ds, "data_vars", {}))
+    for name in names:
+        if name in data_vars:
+            return name
+    return None
+
+
+def _to_time_lat_lon(
+    da: xr.DataArray, time_name: str, lat_name: str, lon_name: str
+) -> xr.DataArray:
+    """Transpose a SIF DataArray to ``(time, lat, lon)`` by its own dim names.
+
+    Some OCO-3 Lite distributions ship ``(lat, lon, time)`` while
+    :func:`cos.core.reduce.reduce_grid`/``basin_mean`` index ``(time, lat, lon)``.
+    Reorder only the dims that exist (a single-time 2-D grid has no time dim),
+    keeping any unexpected leading dims ahead of the canonical trailing axes.
+    """
+    dims = tuple(str(d) for d in da.dims)
+    wanted = [d for d in (time_name, lat_name, lon_name) if d in dims]
+    if not wanted:
+        return da
+    leading = [d for d in dims if d not in wanted]
+    order = leading + wanted
+    if order == list(dims):
+        return da
+    return da.transpose(*order)

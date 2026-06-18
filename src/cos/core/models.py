@@ -64,6 +64,7 @@ class ObservationKind(StrEnum):
     FAPAR = "fapar"                        # fraction of absorbed PAR, dimensionless
     VOD = "vod"                            # vegetation optical depth, dimensionless
     FREEZE_THAW = "freeze_thaw"            # surface frozen state / frozen fraction
+    WATER_STORAGE = "water_storage"        # lake/reservoir storage (change), km3
 
 
 #: Frozen canonical SI unit per kind (design §2 unit table). The connector MUST
@@ -88,6 +89,7 @@ KIND_UNITS: dict[ObservationKind, str] = {
     ObservationKind.FAPAR: "1",                  # absorbed-PAR fraction (0..1)
     ObservationKind.VOD: "1",                    # vegetation optical depth (dimensionless)
     ObservationKind.FREEZE_THAW: "1",            # frozen-state flag / frozen fraction (0..1)
+    ObservationKind.WATER_STORAGE: "km3",        # lake/reservoir storage (change)
 }
 
 #: COS kind -> SYMFLUENCE ``obs_type`` (they coincide today, but the indirection
