@@ -78,6 +78,25 @@ async def test_list_sites_from_explicit_ids():
     assert {s.site_id for s in sites} == {"snotel:679", "snotel:680"}
 
 
+def test_full_triplet_is_preserved_not_mangled():
+    # Regression: a full AWDB triplet must pass through unmangled. Splitting on
+    # any ":" turned "679:WA:SNTL" into "WA:SNTL" -> a bogus triplet -> empty
+    # report (parity run returned 0 rows until this was fixed).
+    conn = SNOTELConnector()
+    spec = ReductionSpec(domain_name="x", station_ids=("679:WA:SNTL",))
+    ids = conn._station_ids(spec)
+    assert ids == ["679:WA:SNTL"]
+    assert conn._triplet(ids[0], spec) == "679:WA:SNTL"
+
+
+def test_bare_and_namespaced_ids_resolve_to_triplets():
+    conn = SNOTELConnector()
+    spec = ReductionSpec(domain_name="x", station_ids=("679", "snotel:680"), options={"state": "WA"})
+    ids = conn._station_ids(spec)
+    assert ids == ["679", "680"]
+    assert [conn._triplet(i, spec) for i in ids] == ["679:WA:SNTL", "680:WA:SNTL"]
+
+
 @pytest.mark.network
 @pytest.mark.asyncio
 async def test_live_smoke_snotel():
