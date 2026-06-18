@@ -12,14 +12,23 @@ is no SYMFLUENCE native handler for AMSR2 SWE, so the offline tests reproduce th
 on a synthetic inline fixture rather than asserting native parity.
 
 Published spec reproduced here (AU_DySno / AMSR2 daily SWE):
-    * SWE is distributed as an unsigned-byte (or scaled-integer) grid where the
-      stored digital number (DN) is **mm of SWE divided by the scale factor**;
-      the published scale factor is **2 mm per count** — i.e. ``swe_mm = DN * 2``.
-    * Valid SWE DN range is ``0..240`` (so 0..480 mm w.e.); DN values
-      ``241..255`` are reserved **flag/fill sentinels** (open water, mountainous
-      mask, permanent snow/ice, off-Earth, etc.) and carry no SWE.
-    * Any flag/fill cell, the NetCDF ``_FillValue``, and non-finite values are
-      masked to NaN → they reduce to :class:`~cos.core.models.QualityFlag.MISSING`.
+    * SWE is distributed as a scaled-integer grid where the stored digital number
+      (DN) becomes mm of SWE via the variable's own ``scale_factor``. The scale is
+      **hemisphere-dependent**: the real granule metadata carries
+      ``scale_factor=1.0`` on ``SWE_NorthernDaily`` ("0-240 SWE mm") and
+      ``scale_factor=2.0`` on ``SWE_SouthernDaily`` (DN/2). The connector reads the
+      per-variable ``scale_factor`` from metadata rather than hardcoding ``*2``.
+    * Valid SWE DN range is ``0..240``; DN values ``241..255`` are reserved
+      **flag/fill sentinels** (open water, mountainous mask, permanent snow/ice,
+      off-Earth, etc.) and carry no SWE.
+    * Any flag/fill cell, the NetCDF ``_FillValue``, off-Earth ``inf`` fills, and
+      non-finite values are masked to NaN → they reduce to
+      :class:`~cos.core.models.QualityFlag.MISSING`.
+
+The real AU_DySno EASE-Grid product stores **2-D** lat/lon (721x721) with ``inf``
+off-Earth fills, so :meth:`reduce_arrays` carries a dedicated 2-D-coordinate
+reduction path (bbox mask + cos-lat-weighted mean / nearest valid cell) alongside
+the 1-D :func:`cos.core.reduce.reduce_grid` path.
 
 This connector extracts ``lats, lons, times, swe_dn`` from a supplied file
 (config ``nc_path`` / ``path`` — live NSIDC/Earthdata download is not yet wired,
@@ -55,8 +64,16 @@ from cos.core.registry import register
 
 logger = structlog.get_logger()
 
-#: Published AU_DySno scale: stored count (DN) -> mm SWE is ``DN * SOURCE_SWE_SCALE``.
+#: Fallback AU_DySno scale when a variable carries no ``scale_factor`` metadata.
+#: The published default count->mm scale is ``DN * SOURCE_SWE_SCALE``.
 SOURCE_SWE_SCALE = 2.0
+#: Per-variable fallback scales (mm per count) by published variable name. The
+#: real granule metadata shows the Northern daily layer is already in mm
+#: (scale 1.0, "0-240 SWE mm") while the Southern daily layer is DN/2 (scale 2.0).
+HEMISPHERE_SCALE = {
+    "SWE_NorthernDaily": 1.0,
+    "SWE_SouthernDaily": 2.0,
+}
 #: Largest valid SWE digital number; DN above this is a flag/fill sentinel.
 MAX_VALID_DN = 240.0
 #: Maximum physically meaningful SWE (mm w.e.) implied by the valid DN range.
@@ -120,13 +137,34 @@ class AMSR2SWEConnector(BaseObservationConnector):
                     f"NetCDF missing an AMSR2 SWE variable (tried {SWE_VARIABLES})",
                 )
             da = ds[var]
+            scale = self._resolve_scale(var, da.attrs)
             lat_name = "lat" if "lat" in ds else _coord_like(ds, "lat")
             lon_name = "lon" if "lon" in ds else _coord_like(ds, "lon")
             lats = np.asarray(ds[lat_name].values, dtype="float64")
             lons = np.asarray(ds[lon_name].values, dtype="float64")
             times = np.asarray(ds["time"].values)
             swe_dn = np.asarray(da.values, dtype="float64")  # (time, lat, lon), stored DN
-        return self.reduce_arrays(lats, lons, times, swe_dn, spec, start, end)
+        return self.reduce_arrays(lats, lons, times, swe_dn, spec, start, end, scale=scale)
+
+    @staticmethod
+    def _resolve_scale(var_name: str, attrs: dict) -> float:
+        """Per-variable mm-per-count scale.
+
+        Prefer the variable's own ``scale_factor`` metadata (the real AU_DySno
+        granule carries 1.0 on the Northern daily layer, 2.0 on the Southern),
+        then the published hemisphere fallback, then the global default.
+        """
+        import numpy as np
+
+        raw = attrs.get("scale_factor")
+        if raw is not None:
+            try:
+                scale = float(np.asarray(raw).reshape(-1)[0]) if hasattr(raw, "__len__") else float(raw)
+            except (TypeError, ValueError):
+                scale = 0.0
+            if scale > 0.0:
+                return scale
+        return HEMISPHERE_SCALE.get(var_name, SOURCE_SWE_SCALE)
 
     # -- the architecture-critical, hermetically-tested core -----------------
 
@@ -139,14 +177,21 @@ class AMSR2SWEConnector(BaseObservationConnector):
         spec: ReductionSpec,
         start: datetime,
         end: datetime,
+        *,
+        scale: float = SOURCE_SWE_SCALE,
     ) -> ObservationSeries:
         """Mask flags/fill, scale DN→mm, basin-reduce, window-trim → canonical series.
 
         *swe_dn* is shaped ``(time, lat, lon)`` of stored digital numbers. Reproduces
         the published AU_DySno spec exactly: cells whose DN is a flag/fill sentinel
-        (``DN > 240``), the NetCDF fill value, or non-finite are masked to NaN; the
-        remaining counts become millimetres via ``swe_mm = DN * 2``; the masked NaN
-        cells reduce to :class:`~cos.core.models.QualityFlag.MISSING`.
+        (``DN > 240``), the NetCDF fill value, off-Earth ``inf``, or non-finite are
+        masked to NaN; the remaining counts become millimetres via the per-variable
+        *scale* (mm per count); the masked NaN cells reduce to
+        :class:`~cos.core.models.QualityFlag.MISSING`.
+
+        Coordinate shape is honoured: 1-D ``lat``/``lon`` vectors defer to
+        :func:`cos.core.reduce.reduce_grid`; 2-D EASE-Grid lat/lon (the real
+        product) take a dedicated bbox-mask reduction path.
         """
         import numpy as np
 
@@ -157,7 +202,8 @@ class AMSR2SWEConnector(BaseObservationConnector):
         dn = np.asarray(swe_dn, dtype="float64")
 
         # Published spec mask: flag/fill sentinels (DN 241..255), the NetCDF fill
-        # value, negative DN, and non-finite cells are not SWE -> NaN.
+        # value, negative DN, and non-finite (incl. off-Earth inf) cells are not
+        # SWE -> NaN.
         invalid = (
             (dn == FILL_VALUE)
             | ~np.isfinite(dn)
@@ -168,8 +214,9 @@ class AMSR2SWEConnector(BaseObservationConnector):
 
         # Convert stored count -> mm w.e. at the boundary (linear, so applying it
         # pre-reduction is identical to the post-reduction order and keeps the
-        # canonical unit (mm) inside reduce_grid).
-        swe_mm = dn * SOURCE_SWE_SCALE
+        # canonical unit (mm)). *scale* is the per-variable mm-per-count factor
+        # (hemisphere-dependent on the real AU_DySno product).
+        swe_mm = dn * scale
 
         reduction = self._choose_reduction(spec)
         point = spec.centroid
@@ -179,11 +226,17 @@ class AMSR2SWEConnector(BaseObservationConnector):
         if reduction != SpatialReduction.BASIN_MEAN and point is None:
             raise ReductionError("AMSR2 SWE nearest_cell requires spec.centroid")
 
-        points = reduce_grid(
-            lats, lons, times, swe_mm,
-            reduction=reduction, bbox=bbox, point=point,
-            kind=self.kind, unit=KIND_UNITS[self.kind],
-        )
+        if lats.ndim == 2 or lons.ndim == 2:
+            # Real EASE-Grid product: 2-D lat/lon. reduce_grid assumes 1-D coord
+            # vectors (it indexes lat/lon axes independently), which IndexErrors
+            # on a (721,721) grid -> reduce over a bbox cell-mask instead.
+            points = self._reduce_grid_2d(lats, lons, times, swe_mm, reduction, bbox, point)
+        else:
+            points = reduce_grid(
+                lats, lons, times, swe_mm,
+                reduction=reduction, bbox=bbox, point=point,
+                kind=self.kind, unit=KIND_UNITS[self.kind],
+            )
 
         # Window-trim, half-open UTC [start, end).
         start_u = _utc(start)
@@ -201,10 +254,85 @@ class AMSR2SWEConnector(BaseObservationConnector):
                 "source": "AMSR2 Unified L3 Daily Snow Water Equivalent",
                 "product": "AU_DySno",
                 "url": "https://nsidc.org/data/au_dysno",
-                "scale_mm_per_count": f"{SOURCE_SWE_SCALE:g}",
+                "scale_mm_per_count": f"{scale:g}",
             },
             fetched_at=datetime.now(UTC),
         )
+
+    def _reduce_grid_2d(
+        self,
+        lats,
+        lons,
+        times,
+        values,
+        reduction: SpatialReduction,
+        bbox: tuple[float, float, float, float] | None,
+        point: tuple[float, float] | None,
+    ) -> list[ObservationPoint]:
+        """Reduce a 2-D-coordinate (EASE-Grid) product to canonical points.
+
+        ``lats``/``lons`` are 2-D (ny, nx); ``values`` is (time, ny, nx). Off-Earth
+        cells carry non-finite lat/lon; the bbox mask requires finite coords so they
+        drop out. ``basin_mean`` is the cos-lat-weighted mean over the bbox cells;
+        ``nearest_cell`` is the nearest valid in-grid cell to the centroid.
+        """
+        import numpy as np
+
+        from cos.core.models import QualityFlag
+        from cos.core.reduce import _as_datetime
+
+        lats = np.broadcast_to(np.asarray(lats, dtype="float64"), values.shape[1:])
+        lons = np.broadcast_to(np.asarray(lons, dtype="float64"), values.shape[1:])
+        finite_coord = np.isfinite(lats) & np.isfinite(lons)
+
+        if reduction == SpatialReduction.BASIN_MEAN:
+            if bbox is None:
+                raise ReductionError("AMSR2 SWE basin_mean requires spec.bbox")
+            lat_min, lon_min, lat_max, lon_max = bbox
+            cell_mask = (
+                finite_coord
+                & (lats >= lat_min) & (lats <= lat_max)
+                & (lons >= lon_min) & (lons <= lon_max)
+            )
+            if not cell_mask.any():
+                raise ReductionError(
+                    f"No EASE-Grid cells inside bbox {bbox} on the 2-D coordinate grid"
+                )
+            weights = np.cos(np.deg2rad(np.where(cell_mask, lats, 0.0)))
+            series = np.full(values.shape[0], np.nan, dtype="float64")
+            for t in range(values.shape[0]):
+                layer = values[t]
+                use = cell_mask & np.isfinite(layer)
+                if not use.any():
+                    continue
+                wsum = float(np.sum(weights[use]))
+                if wsum > 0:
+                    series[t] = float(np.sum(layer[use] * weights[use]) / wsum)
+        else:
+            if point is None:
+                raise ReductionError("AMSR2 SWE nearest_cell requires spec.centroid")
+            plat, plon = point
+            dist = np.where(
+                finite_coord,
+                (lats - plat) ** 2 + (lons - plon) ** 2,
+                np.inf,
+            )
+            flat_idx = int(np.argmin(dist))
+            i, j = np.unravel_index(flat_idx, dist.shape)
+            series = values[:, i, j].astype("float64")
+
+        points: list[ObservationPoint] = []
+        for t, v in zip(times, series):
+            ts = t if isinstance(t, datetime) else _as_datetime(t)
+            finite = v is not None and np.isfinite(v)
+            points.append(
+                ObservationPoint(
+                    timestamp=ts,
+                    value=float(v) if finite else None,
+                    quality=QualityFlag.GOOD if finite else QualityFlag.MISSING,
+                )
+            )
+        return points
 
     @staticmethod
     def _trim(points: list[ObservationPoint], start_u: datetime, end_u: datetime) -> list[ObservationPoint]:

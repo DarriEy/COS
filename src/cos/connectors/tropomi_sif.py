@@ -59,6 +59,7 @@ from cos.core.registry import register
 
 if TYPE_CHECKING:
     import numpy as np
+    import xarray as xr
 
 logger = structlog.get_logger()
 
@@ -131,9 +132,15 @@ class TROPOMISIFConnector(BaseObservationConnector):
             da = ds[var_name]
             lat_name = "lat" if "lat" in ds else _coord_like(ds, "lat")
             lon_name = "lon" if "lon" in ds else _coord_like(ds, "lon")
+            time_name = "time" if "time" in ds else _coord_like(ds, "time")
+            # The Caltech gridded product is dim-ordered (lat, lon, time), but
+            # reduce_grid / basin_mean require (time, lat, lon). Transpose by the
+            # dataset's own dim names so any ordering — (time, lat, lon) or
+            # (lat, lon, time) — is normalized before reducing.
+            da = _to_time_lat_lon(da, time_name, lat_name, lon_name)
             lats = np.asarray(ds[lat_name].values, dtype="float64")
             lons = np.asarray(ds[lon_name].values, dtype="float64")
-            times = np.asarray(ds["time"].values)
+            times = np.asarray(ds[time_name].values)
             values = np.asarray(da.values, dtype="float64")  # (time, lat, lon)
         return self.reduce_arrays(lats, lons, times, values, spec, start, end, var_name=var_name)
 
@@ -255,3 +262,24 @@ def _coord_like(ds: object, want: str) -> str:
         if want in str(name).lower():
             return str(name)
     return want
+
+
+def _to_time_lat_lon(
+    da: xr.DataArray, time_name: str, lat_name: str, lon_name: str
+) -> xr.DataArray:
+    """Transpose a SIF DataArray to ``(time, lat, lon)`` by its own dim names.
+
+    The Caltech gridded TROPOMI SIF product ships ``(lat, lon, time)`` while
+    :func:`cos.core.reduce.basin_mean`/``nearest_cell`` index ``(time, lat, lon)``.
+    Reorder only the dims that exist (a 2-D single-time grid has no time dim),
+    keeping any unexpected leading dims ahead of the canonical trailing axes.
+    """
+    dims = tuple(str(d) for d in da.dims)
+    wanted = [d for d in (time_name, lat_name, lon_name) if d in dims]
+    if not wanted:
+        return da
+    leading = [d for d in dims if d not in wanted]
+    order = leading + wanted
+    if order == list(dims):
+        return da
+    return da.transpose(*order)

@@ -153,23 +153,23 @@ class ObservationCapabilitySpec(NamedTuple):
     notes: str
 
 
-#: Every connector (36) carries a real parity grade -> the SYMFLUENCE gate admits
-#: all of them WITHOUT ALLOW_UNGATED_BACKENDS. Validation tiers, honestly labeled
-#: in each grade string:
-#:  * LIVE (25): native-parity verified on REAL downloaded data (grace/snotel +
-#:    the live spot-check campaign + the CDS/AmeriFlux set via the creds we hold).
-#:  * LIVE-spec (3): real data fetched + output validated against the published
-#:    product spec, but NO SYMFLUENCE native to cross-check (swot_wse via the
-#:    anonymous Hydrocron API, modis_albedo, modis_gpp).
-#:  * PARITY-BY-CONSTRUCTION / spec-validated (8): a per-connector test mirrors
-#:    the native reduction (or the product spec, for no-native kinds) on a
-#:    synthetic fixture within a documented tolerance, but no live run yet:
-#:    gleam_et/mswep_precip/openet/ismn_sm (registration-gated — no creds and no
-#:    public endpoint in the native handler either), norswe_swe (2.38 GB no-subset
-#:    Zenodo ZIP), modis_ndvi (NASA CMR granule-search transiently down),
-#:    hubeau_waterlevel (Hub'Eau is geo-fenced to French IPs), cmc_snow_depth
-#:    (reuses the validated cmc_swe reader; live native-parity is pixel-subset-
-#:    sensitive on the coarse 24 km grid). No connector is ungated.
+#: Every connector (43) carries a real parity grade -> the SYMFLUENCE gate admits
+#: all of them WITHOUT ALLOW_UNGATED_BACKENDS. 35 of 43 are validated on REAL
+#: data. Validation tiers, honestly labeled in each grade string:
+#:  * LIVE (26): native-parity verified on REAL downloaded data (grace/snotel +
+#:    the live spot-check campaign + the CDS/AmeriFlux set via the creds we hold
+#:    + modis_fapar exact vs mcd15).
+#:  * LIVE-spec (9): real data fetched + output validated against the published
+#:    product spec, but NO SYMFLUENCE native to cross-check (swot_wse + swot_lake_area
+#:    via the anonymous Hydrocron API, modis_albedo/ndvi/gpp, vodca_vod,
+#:    smap_freeze_thaw, amsr_swe, tropomi_sif — the last two had real-data bugs
+#:    (NH scale / 2-D EASE grid / dim-order) that live validation caught + fixed).
+#:  * PARITY-BY-CONSTRUCTION / spec-validated (8): mirrors the native reduction
+#:    (or product spec) on a synthetic fixture within tolerance, but no live run:
+#:    gleam_et/mswep_precip/openet/ismn_sm (registration-gated), norswe_swe (2.38
+#:    GB no-subset Zenodo), hubeau_waterlevel (Hub'Eau geo-fenced to FR IPs),
+#:    cmc_snow_depth (24 km pixel-subset sensitivity), sentinel1_sm (native uses
+#:    CDSE OAuth2, not CDS; no creds/live-fetch here). No connector is ungated.
 _VALIDATED_PARITY: dict[str, str] = {
     "grace": "value-identical:correlation~1.0 (cm->mm; SYMFLUENCE live parity r=1.0000)",
     "snotel": "value-identical (inch->mm x25.4; SYMFLUENCE live parity r=1.000000, 0 mm)",
@@ -204,16 +204,16 @@ _VALIDATED_PARITY: dict[str, str] = {
     "swot_wse": "LIVE-spec: real SWOT WSE via Hydrocron (anon, 385-515 m, fill masked); no native; test_swot_wse.py",
     "modis_albedo": "LIVE-spec: real MCD43A3 albedo (0..0.7, scale 0.001, fill masked); test_modis_albedo.py",
     "modis_gpp": "LIVE-spec: real MOD17A2H GPP (~0.04% vs spec recompute); test_modis_gpp.py",
-    "modis_ndvi": "spec-validated: MOD13 scale/range/fill + reduction tested; live pending CMR; test_modis_ndvi.py",
+    "modis_ndvi": "LIVE-spec: real MOD13A2 NDVI (0.81, scale 0.0001, fill masked); test_modis_ndvi.py",
     "hubeau_waterlevel": "parity-by-construction vs native (mm->m); live = FR-IP only; test_hubeau_waterlevel.py",
     "cmc_snow_depth": "parity-by-construction (reuses validated cmc_swe reader, emits depth m); test_cmc_snow_depth.py",
-    "swot_lake_area": "spec-validated: SWOT lake area via Hydrocron (km2->fraction); test_swot_lake_area.py",
-    "sentinel1_sm": "parity-by-construction vs native sentinel1_sm (m3/m3); test_sentinel1_sm.py",
-    "amsr_swe": "spec-validated: AMSR2 AU_DySno SWE (DN*2->mm); test_amsr_swe.py",
-    "tropomi_sif": "spec-validated: TROPOMI SIF (mW/m2/nm/sr); test_tropomi_sif.py",
-    "modis_fapar": "parity-by-construction vs native mcd15 FAPAR (scale 0.01); test_modis_fapar.py",
-    "vodca_vod": "spec-validated: VODCA VOD unpacked (dimensionless); test_vodca_vod.py",
-    "smap_freeze_thaw": "spec-validated: SMAP SPL3FTP frozen-fraction (0..1); test_smap_freeze_thaw.py",
+    "swot_lake_area": "LIVE-spec: real SWOT lake via Hydrocron (anon, 32 pts 0.4-0.63 km2); test_swot_lake_area.py",
+    "sentinel1_sm": "parity-by-construction vs native (m3/m3); live needs CDSE OAuth2 creds; test_sentinel1_sm.py",
+    "amsr_swe": "LIVE-spec: real AMSR2 AU_DySno (NH scale fixed, 2-D EASE grid); test_amsr_swe.py",
+    "tropomi_sif": "LIVE-spec: real MEaSUREs/TROPOMI SIF (dim-order fixed, mW/m2/nm/sr); test_tropomi_sif.py",
+    "modis_fapar": "LIVE: native-parity vs mcd15 FAPAR exact (0.4108) on real MCD15A2H; test_modis_fapar.py",
+    "vodca_vod": "LIVE-spec: real VODCA K-band VOD (Amazon ~1.0, unpacked); test_vodca_vod.py",
+    "smap_freeze_thaw": "LIVE-spec: real SMAP SPL3FTP frozen-fraction (Arctic 1.0); test_smap_freeze_thaw.py",
 }
 
 #: Curated provider notes; connectors not listed get a generic note derived from

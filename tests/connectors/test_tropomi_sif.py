@@ -71,6 +71,54 @@ def test_reduce_arrays_basin_mean_identity_scale_and_fill_mask():
     assert series.points[0].quality.value == "good"
 
 
+@pytest.fixture
+def sif_nc_lat_lon_time(tmp_path):
+    """Real-data shape: Caltech gridded SIF is dim-ordered (lat, lon, time).
+
+    The synthetic fixture above is (time, lat, lon); the published product is
+    (lat, lon, time). reduce_file must transpose to (time, lat, lon) before
+    reducing — without the transpose, basin_mean indexes the wrong axes.
+    """
+    xr = pytest.importorskip("xarray")
+    pytest.importorskip("netCDF4")
+    times = np.array(["2020-06-15", "2020-07-15"], dtype="datetime64[ns]")
+    lats = np.array([50.0, 51.0, 52.0])
+    lons = np.array([-116.0, -115.0, -114.0])
+    # (lat, lon, time) ordering, uniform 2.0 with one fill cell.
+    data = np.full((3, 3, 2), 2.0)
+    data[0, 0, 0] = SIF_FILL_VALUE
+    ds = xr.Dataset(
+        {"sif": (("lat", "lon", "time"), data)},
+        coords={"time": times, "lat": lats, "lon": lons},
+    )
+    path = tmp_path / "tropomi_sif_lat_lon_time.nc"
+    ds.to_netcdf(path)
+    return path
+
+
+def test_reduce_file_lat_lon_time_ordering(sif_nc_lat_lon_time):
+    """Regression: a (lat, lon, time)-ordered product must reduce without error.
+
+    Against the pre-fix reader (which passed da.values straight through as if it
+    were (time, lat, lon)), basin_mean raises IndexError on the real Caltech
+    grid. With the transpose, it yields the plausible identity-scale SIF.
+    """
+    conn = TROPOMISIFConnector()
+    spec = ReductionSpec(
+        domain_name="bow", bbox=(50.0, -116.0, 52.0, -114.0),
+        centroid=(51.0, -115.0), area_km2=8000.0,
+    )
+    series = conn.reduce_file(
+        sif_nc_lat_lon_time, spec,
+        datetime(2020, 1, 1, tzinfo=UTC), datetime(2021, 1, 1, tzinfo=UTC),
+    )
+    assert series.unit == "mW/m2/nm/sr"
+    assert len(series.points) == 2  # one point per time step, not per lat
+    for p in series.points:
+        assert p.value == pytest.approx(2.0, abs=1e-6)
+        assert p.quality.value == "good"
+
+
 def test_reduce_file_basin_mean(sif_nc):
     conn = TROPOMISIFConnector()
     spec = ReductionSpec(

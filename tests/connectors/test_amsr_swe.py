@@ -190,6 +190,97 @@ def test_reduce_file_roundtrip_netcdf(tmp_path, amsr_arrays):
     assert all(p.value == pytest.approx(100.0, abs=1e-6) for p in series.points)
 
 
+# -- regression tests for the real AU_DySno granule shape ---------------------
+# The synthetic fixtures above used a 1-D lat/lon grid and assumed every layer is
+# DN/2. The real AMSR2 AU_DySno product breaks both assumptions: it ships 2-D
+# 721x721 EASE-Grid coords (with inf off-Earth fills) and a *hemisphere-dependent*
+# scale (Northern daily is already mm, scale_factor=1.0; Southern is DN/2).
+
+
+def test_northern_daily_scale_is_one_not_two(tmp_path):
+    """REGRESSION: SWE_NorthernDaily metadata scale_factor=1.0 must be honored.
+
+    The old connector hardcoded DN*2 for all data, doubling NH SWE (29.571 mm
+    where the truth was 14.786 mm). Reading the variable's scale_factor fixes it.
+    """
+    xr = pytest.importorskip("xarray")
+    pytest.importorskip("netCDF4")
+    times = np.array(["2024-02-15"], dtype="datetime64[ns]")
+    lats = np.array([50.0, 51.0, 52.0])
+    lons = np.array([-116.0, -115.0, -114.0])
+    dn = np.full((1, 3, 3), 15.0)  # 15 counts; NH layer is already mm -> 15 mm
+    ds = xr.Dataset(
+        {"SWE_NorthernDaily": (("time", "lat", "lon"), dn)},
+        coords={"time": times, "lat": lats, "lon": lons},
+    )
+    ds["SWE_NorthernDaily"].attrs["scale_factor"] = 1.0  # "0-240 SWE mm"
+    path = tmp_path / "amsr_nh.nc"
+    ds.to_netcdf(path)
+
+    conn = AMSR2SWEConnector()
+    series = conn.reduce_file(
+        path, _spec(),
+        datetime(2024, 1, 1, tzinfo=UTC), datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    # With the bug (DN*2) this would be 30 mm; correct NH scale gives 15 mm.
+    assert series.points[0].value == pytest.approx(15.0, abs=1e-6)
+    assert series.source_info["scale_mm_per_count"] == "1"
+
+
+def test_two_dimensional_ease_grid_coords_reduce(tmp_path):
+    """REGRESSION: real AU_DySno stores 2-D (721x721) EASE-Grid lat/lon.
+
+    reduce_grid assumes 1-D coord vectors and raises IndexError on 2-D coords.
+    The 2-D reduction path masks the bbox cells (and off-Earth inf fills) and
+    reduces over them instead.
+    """
+    times = np.array(["2024-02-15"], dtype="datetime64[ns]")
+    # 4x4 EASE-Grid-like patch with 2-D curvilinear coords.
+    lat2d, lon2d = np.meshgrid(
+        np.array([49.5, 50.5, 51.5, 52.5]),
+        np.array([-116.5, -115.5, -114.5, -113.5]),
+        indexing="ij",
+    )
+    # Off-Earth corner: non-finite coords + inf value (the real product's fill).
+    lat2d[0, 0] = np.inf
+    lon2d[0, 0] = np.inf
+    dn = np.full((1, 4, 4), 20.0)  # 20 counts
+    dn[0, 0, 0] = np.inf           # off-Earth fill -> masked
+    dn[0, 3, 3] = 252.0            # flag sentinel -> masked
+
+    conn = AMSR2SWEConnector()
+    # scale=1.0 (NH): valid cells -> 20 mm; basin_mean over the in-bbox finite cells.
+    series = conn.reduce_arrays(
+        lat2d, lon2d, times, dn, _spec(),
+        datetime(2024, 1, 1, tzinfo=UTC), datetime(2025, 1, 1, tzinfo=UTC),
+        scale=1.0,
+    )
+    assert series.unit == "mm"
+    assert len(series.points) == 1
+    assert series.points[0].value == pytest.approx(20.0, abs=1e-6)
+    assert series.points[0].quality.value == "good"
+
+
+def test_two_dimensional_coords_nearest_cell(tmp_path):
+    """2-D coord nearest_cell picks the nearest valid in-grid cell to the centroid."""
+    times = np.array(["2024-02-15"], dtype="datetime64[ns]")
+    lat2d, lon2d = np.meshgrid(
+        np.array([50.0, 51.0, 52.0]),
+        np.array([-116.0, -115.0, -114.0]),
+        indexing="ij",
+    )
+    dn = np.zeros((1, 3, 3))
+    dn[0, 1, 1] = 30.0  # the centroid (51, -115) cell
+    conn = AMSR2SWEConnector()
+    series = conn.reduce_arrays(
+        lat2d, lon2d, times, dn, _spec(area_km2=500.0),
+        datetime(2024, 1, 1, tzinfo=UTC), datetime(2025, 1, 1, tzinfo=UTC),
+        scale=1.0,
+    )
+    assert series.reduction == SpatialReduction.NEAREST_CELL
+    assert series.points[0].value == pytest.approx(30.0, abs=1e-6)
+
+
 @pytest.mark.network
 @pytest.mark.asyncio
 async def test_live_smoke_amsr_swe():
