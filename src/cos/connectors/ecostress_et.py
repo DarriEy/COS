@@ -72,9 +72,7 @@ from cos.core.exceptions import ConnectorError, ReductionError
 from cos.core.models import (
     KIND_UNITS,
     ObservationKind,
-    ObservationPoint,
     ObservationSeries,
-    QualityFlag,
     ReductionSpec,
     SiteRef,
     SpatialReduction,
@@ -217,7 +215,7 @@ class ECOSTRESSETConnector(BaseObservationConnector):
         """
         import numpy as np
 
-        from cos.core.reduce import reduce_grid
+        from cos.core.reduce import reduce_grid, reduce_grid_2d
 
         lats = np.asarray(lats, dtype="float64")
         lons = np.asarray(lons, dtype="float64")
@@ -257,7 +255,10 @@ class ECOSTRESSETConnector(BaseObservationConnector):
             # Real swath/tile product can carry 2-D lat/lon. reduce_grid assumes
             # 1-D coord vectors (it indexes lat/lon axes independently), which
             # IndexErrors on a 2-D grid -> reduce over a bbox cell-mask instead.
-            points = self._reduce_grid_2d(lats, lons, times, values, reduction, bbox, point)
+            points = reduce_grid_2d(
+                lats, lons, times, values,
+                reduction=reduction, bbox=bbox, point=point, grid_label="ECOSTRESS ET",
+            )
         else:
             points = reduce_grid(
                 lats, lons, times, values,
@@ -302,79 +303,6 @@ class ECOSTRESSETConnector(BaseObservationConnector):
             return WM2_TO_MM_PER_DAY, "W/m2"
         return SOURCE_MM_PER_DAY, source_units or "mm/day"
 
-    def _reduce_grid_2d(
-        self,
-        lats,
-        lons,
-        times,
-        values,
-        reduction: SpatialReduction,
-        bbox: tuple[float, float, float, float] | None,
-        point: tuple[float, float] | None,
-    ) -> list[ObservationPoint]:
-        """Reduce a 2-D-coordinate (swath/tile) product to canonical points.
-
-        ``lats``/``lons`` are 2-D (ny, nx); ``values`` is (time, ny, nx). Off-grid
-        cells carry non-finite lat/lon and drop out of the bbox mask. ``basin_mean``
-        is the cos-lat-weighted mean over the bbox cells; ``nearest_cell`` is the
-        nearest valid in-grid cell to the centroid.
-        """
-        import numpy as np
-
-        from cos.core.reduce import _as_datetime
-
-        lats = np.broadcast_to(np.asarray(lats, dtype="float64"), values.shape[1:])
-        lons = np.broadcast_to(np.asarray(lons, dtype="float64"), values.shape[1:])
-        finite_coord = np.isfinite(lats) & np.isfinite(lons)
-
-        if reduction == SpatialReduction.BASIN_MEAN:
-            if bbox is None:
-                raise ReductionError("ECOSTRESS ET basin_mean requires spec.bbox")
-            lat_min, lon_min, lat_max, lon_max = bbox
-            cell_mask = (
-                finite_coord
-                & (lats >= lat_min) & (lats <= lat_max)
-                & (lons >= lon_min) & (lons <= lon_max)
-            )
-            if not cell_mask.any():
-                raise ReductionError(
-                    f"No grid cells inside bbox {bbox} on the 2-D coordinate grid"
-                )
-            weights = np.cos(np.deg2rad(np.where(cell_mask, lats, 0.0)))
-            series = np.full(values.shape[0], np.nan, dtype="float64")
-            for t in range(values.shape[0]):
-                layer = values[t]
-                use = cell_mask & np.isfinite(layer)
-                if not use.any():
-                    continue
-                wsum = float(np.sum(weights[use]))
-                if wsum > 0:
-                    series[t] = float(np.sum(layer[use] * weights[use]) / wsum)
-        else:
-            if point is None:
-                raise ReductionError("ECOSTRESS ET nearest_cell requires spec.centroid")
-            plat, plon = point
-            dist = np.where(
-                finite_coord,
-                (lats - plat) ** 2 + (lons - plon) ** 2,
-                np.inf,
-            )
-            flat_idx = int(np.argmin(dist))
-            i, j = np.unravel_index(flat_idx, dist.shape)
-            series = values[:, i, j].astype("float64")
-
-        points: list[ObservationPoint] = []
-        for t, v in zip(times, series):
-            ts = t if isinstance(t, datetime) else _as_datetime(t)
-            finite = v is not None and np.isfinite(v)
-            points.append(
-                ObservationPoint(
-                    timestamp=ts,
-                    value=float(v) if finite else None,
-                    quality=QualityFlag.GOOD if finite else QualityFlag.MISSING,
-                )
-            )
-        return points
 
     def _find_variable(self, ds: object) -> str | None:
         """Pick the ET variable in the published preference order (daily first)."""

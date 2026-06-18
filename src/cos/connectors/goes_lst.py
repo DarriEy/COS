@@ -63,7 +63,6 @@ from cos.core.exceptions import ConnectorError, ReductionError
 from cos.core.models import (
     KIND_UNITS,
     ObservationKind,
-    ObservationPoint,
     ObservationSeries,
     ReductionSpec,
     SiteRef,
@@ -215,7 +214,7 @@ class GOESLSTConnector(BaseObservationConnector):
         """
         import numpy as np
 
-        from cos.core.reduce import reduce_grid
+        from cos.core.reduce import reduce_grid, reduce_grid_2d
 
         lats = np.asarray(lats, dtype="float64")
         lons = np.asarray(lons, dtype="float64")
@@ -250,8 +249,11 @@ class GOESLSTConnector(BaseObservationConnector):
         if lats.ndim == 2 or lons.ndim == 2:
             # Geolocated ABI fixed-grid product: 2-D lat/lon. reduce_grid assumes
             # 1-D coord vectors (it indexes lat/lon axes independently), which
-            # IndexErrors on a 2-D grid -> reduce over a bbox cell-mask instead.
-            points = self._reduce_grid_2d(lats, lons, times, values, reduction, bbox, point)
+            # IndexErrors on a 2-D grid -> reduce over the shared 2-D bbox kernel.
+            points = reduce_grid_2d(
+                lats, lons, times, values,
+                reduction=reduction, bbox=bbox, point=point, grid_label="ABI fixed-grid",
+            )
         else:
             points = reduce_grid(
                 lats, lons, times, values,
@@ -280,95 +282,6 @@ class GOESLSTConnector(BaseObservationConnector):
             },
             fetched_at=datetime.now(UTC),
         )
-
-    def _reduce_grid_2d(
-        self,
-        lats: np.ndarray,
-        lons: np.ndarray,
-        times: np.ndarray,
-        values: np.ndarray,
-        reduction: SpatialReduction,
-        bbox: tuple[float, float, float, float] | None,
-        point: tuple[float, float] | None,
-    ) -> list[ObservationPoint]:
-        """Reduce a 2-D-coordinate (geostationary fixed-grid) product to points.
-
-        ``lats``/``lons`` are 2-D (ny, nx); ``values`` is (time, ny, nx). Off-disk
-        ABI cells carry non-finite lat/lon; the bbox mask requires finite coords so
-        they drop out. ``basin_mean`` is the cos-lat-weighted mean over the bbox
-        cells; ``nearest_cell`` is the nearest valid in-grid cell to the centroid.
-
-        Longitude convention is reconciled with the 1-D reducer: the request bbox
-        is shifted into the grid's 0–360 convention (:func:`_normalize_lons`), and
-        nearest-cell uses a great-circle (haversine) distance, which is accurate at
-        high latitude / the disk edge and seam-robust across the 0/360 meridian.
-        """
-        import numpy as np
-
-        from cos.core.models import QualityFlag
-        from cos.core.reduce import _as_datetime, _normalize_lons
-
-        lats = np.broadcast_to(np.asarray(lats, dtype="float64"), values.shape[1:])
-        lons = np.broadcast_to(np.asarray(lons, dtype="float64"), values.shape[1:])
-        finite_coord = np.isfinite(lats) & np.isfinite(lons)
-
-        if reduction == SpatialReduction.BASIN_MEAN:
-            if bbox is None:
-                raise ReductionError("GOES LST basin_mean requires spec.bbox")
-            lat_min, lon_min, lat_max, lon_max = bbox
-            # Normalize against only the FINITE grid lons: off-disk cells carry inf,
-            # which would poison _normalize_lons' nanmax-based 0–360 detection.
-            lon_min, lon_max = _normalize_lons(lons[finite_coord], lon_min, lon_max)
-            cell_mask = (
-                finite_coord
-                & (lats >= lat_min) & (lats <= lat_max)
-                & (lons >= lon_min) & (lons <= lon_max)
-            )
-            if not cell_mask.any():
-                raise ReductionError(
-                    f"No ABI fixed-grid cells inside bbox {bbox} on the 2-D coordinate grid"
-                )
-            weights = np.cos(np.deg2rad(np.where(cell_mask, lats, 0.0)))
-            series = np.full(values.shape[0], np.nan, dtype="float64")
-            for t in range(values.shape[0]):
-                layer = values[t]
-                use = cell_mask & np.isfinite(layer)
-                if not use.any():
-                    continue
-                wsum = float(np.sum(weights[use]))
-                if wsum > 0:
-                    series[t] = float(np.sum(layer[use] * weights[use]) / wsum)
-        else:
-            if point is None:
-                raise ReductionError("GOES LST nearest_cell requires spec.centroid")
-            plat, plon = point
-            # Great-circle (haversine) distance: accurate near the disk edge / high
-            # latitude where planar degree-distance distorts, and seam-robust across
-            # the 0/360 meridian (sin(Δλ/2) is periodic), so no lon normalization is
-            # needed here. The haversine term is monotonic in distance -> argmin ok.
-            dphi = np.deg2rad(lats - plat)
-            dlam = np.deg2rad(lons - plon)
-            hav = (
-                np.sin(dphi / 2.0) ** 2
-                + np.cos(np.deg2rad(plat)) * np.cos(np.deg2rad(lats)) * np.sin(dlam / 2.0) ** 2
-            )
-            dist = np.where(finite_coord, hav, np.inf)
-            flat_idx = int(np.argmin(dist))
-            i, j = np.unravel_index(flat_idx, dist.shape)
-            series = values[:, i, j].astype("float64")
-
-        points: list[ObservationPoint] = []
-        for t, v in zip(times, series):
-            ts = t if isinstance(t, datetime) else _as_datetime(t)
-            finite = v is not None and np.isfinite(v)
-            points.append(
-                ObservationPoint(
-                    timestamp=ts,
-                    value=float(v) if finite else None,
-                    quality=QualityFlag.GOOD if finite else QualityFlag.MISSING,
-                )
-            )
-        return points
 
     def _find_variable(self, ds: object, candidates: tuple[str, ...], hint: str) -> str | None:
         """Pick a variable by published name, then by any *hint*-like name."""

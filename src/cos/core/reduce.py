@@ -145,6 +145,91 @@ def reduce_grid(
     else:
         raise ReductionError(f"{reduction} is not a gridded reduction")
 
+    return _points_from_series(times, series)
+
+
+def reduce_grid_2d(
+    lats: np.ndarray,
+    lons: np.ndarray,
+    times: np.ndarray,
+    values: np.ndarray,
+    *,
+    reduction: SpatialReduction,
+    bbox: tuple[float, float, float, float] | None,
+    point: tuple[float, float] | None,
+    grid_label: str = "2-D coordinate",
+) -> list[ObservationPoint]:
+    """Reduce a **2-D-coordinate** product (curvilinear / swath / fixed-grid / EASE).
+
+    The 1-D :func:`reduce_grid` indexes the lat and lon axes independently, which
+    only works for 1-D coordinate vectors. Real swath / geostationary fixed-grid /
+    EASE-Grid products carry **2-D** ``(ny, nx)`` lat/lon (``values`` is
+    ``(time, ny, nx)``); this kernel reduces them over a per-cell bbox mask. It is
+    the single home for the logic the gridded connectors previously each copied.
+
+    Off-grid cells carry non-finite lat/lon and drop out of the mask:
+
+    * ``basin_mean`` — cos-lat-weighted mean over the in-bbox cells. The request
+      bbox is shifted into the grid's 0–360 convention (:func:`_normalize_lons`)
+      against only the FINITE lons, so off-grid ``inf`` cells cannot poison the
+      ``nanmax``-based convention detection;
+    * ``nearest_cell`` / ``point_sample`` — the cell at the smallest **great-circle
+      (haversine)** distance to *point*: accurate at high latitude / a disk edge,
+      and seam-robust across the 0/360 meridian (``sin(Δλ/2)`` is periodic), so no
+      longitude normalization is needed for the point.
+
+    ``grid_label`` only flavors the empty-bbox :class:`ReductionError` message.
+    """
+    lats = np.broadcast_to(np.asarray(lats, dtype="float64"), values.shape[1:])
+    lons = np.broadcast_to(np.asarray(lons, dtype="float64"), values.shape[1:])
+    finite_coord = np.isfinite(lats) & np.isfinite(lons)
+
+    if reduction == SpatialReduction.BASIN_MEAN:
+        if bbox is None:
+            raise ReductionError("basin_mean reduction requires a bbox")
+        lat_min, lon_min, lat_max, lon_max = bbox
+        lon_min, lon_max = _normalize_lons(lons[finite_coord], lon_min, lon_max)
+        cell_mask = (
+            finite_coord
+            & (lats >= lat_min) & (lats <= lat_max)
+            & (lons >= lon_min) & (lons <= lon_max)
+        )
+        if not cell_mask.any():
+            raise ReductionError(
+                f"No {grid_label} cells inside bbox {bbox} on the 2-D coordinate grid"
+            )
+        weights = np.cos(np.deg2rad(np.where(cell_mask, lats, 0.0)))
+        series = np.full(values.shape[0], np.nan, dtype="float64")
+        for t in range(values.shape[0]):
+            layer = values[t]
+            use = cell_mask & np.isfinite(layer)
+            if not use.any():
+                continue
+            wsum = float(np.sum(weights[use]))
+            if wsum > 0:
+                series[t] = float(np.sum(layer[use] * weights[use]) / wsum)
+    elif reduction in (SpatialReduction.NEAREST_CELL, SpatialReduction.POINT_SAMPLE):
+        if point is None:
+            raise ReductionError(f"{reduction} reduction requires a point (lat, lon)")
+        plat, plon = point
+        # Haversine term (monotonic in great-circle distance -> argmin is exact).
+        dphi = np.deg2rad(lats - plat)
+        dlam = np.deg2rad(lons - plon)
+        hav = (
+            np.sin(dphi / 2.0) ** 2
+            + np.cos(np.deg2rad(plat)) * np.cos(np.deg2rad(lats)) * np.sin(dlam / 2.0) ** 2
+        )
+        dist = np.where(finite_coord, hav, np.inf)
+        i, j = np.unravel_index(int(np.argmin(dist)), dist.shape)
+        series = values[:, i, j].astype("float64")
+    else:
+        raise ReductionError(f"{reduction} is not a gridded reduction")
+
+    return _points_from_series(times, series)
+
+
+def _points_from_series(times: np.ndarray, series: np.ndarray) -> list[ObservationPoint]:
+    """Build canonical points from a per-timestep value series (GOOD where finite)."""
     points: list[ObservationPoint] = []
     for t, v in zip(times, series):
         ts = t if isinstance(t, datetime) else _as_datetime(t)

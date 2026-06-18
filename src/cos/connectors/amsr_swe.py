@@ -195,7 +195,7 @@ class AMSR2SWEConnector(BaseObservationConnector):
         """
         import numpy as np
 
-        from cos.core.reduce import reduce_grid
+        from cos.core.reduce import reduce_grid, reduce_grid_2d
 
         lats = np.asarray(lats, dtype="float64")
         lons = np.asarray(lons, dtype="float64")
@@ -230,7 +230,10 @@ class AMSR2SWEConnector(BaseObservationConnector):
             # Real EASE-Grid product: 2-D lat/lon. reduce_grid assumes 1-D coord
             # vectors (it indexes lat/lon axes independently), which IndexErrors
             # on a (721,721) grid -> reduce over a bbox cell-mask instead.
-            points = self._reduce_grid_2d(lats, lons, times, swe_mm, reduction, bbox, point)
+            points = reduce_grid_2d(
+                lats, lons, times, swe_mm,
+                reduction=reduction, bbox=bbox, point=point, grid_label="EASE-Grid",
+            )
         else:
             points = reduce_grid(
                 lats, lons, times, swe_mm,
@@ -259,80 +262,6 @@ class AMSR2SWEConnector(BaseObservationConnector):
             fetched_at=datetime.now(UTC),
         )
 
-    def _reduce_grid_2d(
-        self,
-        lats,
-        lons,
-        times,
-        values,
-        reduction: SpatialReduction,
-        bbox: tuple[float, float, float, float] | None,
-        point: tuple[float, float] | None,
-    ) -> list[ObservationPoint]:
-        """Reduce a 2-D-coordinate (EASE-Grid) product to canonical points.
-
-        ``lats``/``lons`` are 2-D (ny, nx); ``values`` is (time, ny, nx). Off-Earth
-        cells carry non-finite lat/lon; the bbox mask requires finite coords so they
-        drop out. ``basin_mean`` is the cos-lat-weighted mean over the bbox cells;
-        ``nearest_cell`` is the nearest valid in-grid cell to the centroid.
-        """
-        import numpy as np
-
-        from cos.core.models import QualityFlag
-        from cos.core.reduce import _as_datetime
-
-        lats = np.broadcast_to(np.asarray(lats, dtype="float64"), values.shape[1:])
-        lons = np.broadcast_to(np.asarray(lons, dtype="float64"), values.shape[1:])
-        finite_coord = np.isfinite(lats) & np.isfinite(lons)
-
-        if reduction == SpatialReduction.BASIN_MEAN:
-            if bbox is None:
-                raise ReductionError("AMSR2 SWE basin_mean requires spec.bbox")
-            lat_min, lon_min, lat_max, lon_max = bbox
-            cell_mask = (
-                finite_coord
-                & (lats >= lat_min) & (lats <= lat_max)
-                & (lons >= lon_min) & (lons <= lon_max)
-            )
-            if not cell_mask.any():
-                raise ReductionError(
-                    f"No EASE-Grid cells inside bbox {bbox} on the 2-D coordinate grid"
-                )
-            weights = np.cos(np.deg2rad(np.where(cell_mask, lats, 0.0)))
-            series = np.full(values.shape[0], np.nan, dtype="float64")
-            for t in range(values.shape[0]):
-                layer = values[t]
-                use = cell_mask & np.isfinite(layer)
-                if not use.any():
-                    continue
-                wsum = float(np.sum(weights[use]))
-                if wsum > 0:
-                    series[t] = float(np.sum(layer[use] * weights[use]) / wsum)
-        else:
-            if point is None:
-                raise ReductionError("AMSR2 SWE nearest_cell requires spec.centroid")
-            plat, plon = point
-            dist = np.where(
-                finite_coord,
-                (lats - plat) ** 2 + (lons - plon) ** 2,
-                np.inf,
-            )
-            flat_idx = int(np.argmin(dist))
-            i, j = np.unravel_index(flat_idx, dist.shape)
-            series = values[:, i, j].astype("float64")
-
-        points: list[ObservationPoint] = []
-        for t, v in zip(times, series):
-            ts = t if isinstance(t, datetime) else _as_datetime(t)
-            finite = v is not None and np.isfinite(v)
-            points.append(
-                ObservationPoint(
-                    timestamp=ts,
-                    value=float(v) if finite else None,
-                    quality=QualityFlag.GOOD if finite else QualityFlag.MISSING,
-                )
-            )
-        return points
 
     @staticmethod
     def _trim(points: list[ObservationPoint], start_u: datetime, end_u: datetime) -> list[ObservationPoint]:
