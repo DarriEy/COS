@@ -20,9 +20,33 @@ from __future__ import annotations
 #: tier -> connector slugs. Every registered connector must appear in exactly
 #: one tier (asserted by tests/test_connector_integrity.py).
 PROVIDER_TIERS: dict[str, list[str]] = {
-    "monthly": ["grace"],
-    "daily": ["snotel"],
-    "ondemand": ["openet"],
+    # Monthly-cadence products: TWS solutions + 8-day/monthly composites.
+    "monthly": [
+        "grace", "gldas_tws", "cnes_grgs_tws",
+        "mod16_et", "gleam_et", "ssebop_et",
+        "modis_lai", "modis_lst",
+        "modis_ndvi", "modis_gpp", "swot_wse",
+        "swot_lake_area", "tropomi_sif", "modis_fapar",
+        # Frontier monthly products: GRACE mascon solutions, SWOT lake storage,
+        # OCO-3 SIF composites.
+        "csr_grace", "gsfc_grace", "swot_lake_storage", "oco3_sif",
+    ],
+    # Daily point networks + daily/near-daily gridded products.
+    "daily": [
+        "snotel", "canswe_swe", "cmc_swe", "norswe_swe", "snodas_swe",
+        "modis_sca", "ims_sca", "viirs_sca",
+        "smap_sm", "smos_sm", "ascat_sm", "esa_cci_sm", "ismn_sm",
+        "usgs_gw", "ggmn_gw",
+        "chirps_precip", "gpm_imerg_precip", "mswep_precip", "daymet_precip",
+        "jrc_surface_water",
+        "modis_albedo", "cmc_snow_depth", "hubeau_waterlevel",
+        "sentinel1_sm", "amsr_swe", "vodca_vod", "smap_freeze_thaw",
+        # Frontier near-daily gridded thermal/ET: GOES geostationary LST,
+        # ECOSTRESS ISS-overpass LST + ET.
+        "goes_lst", "ecostress_lst", "ecostress_et",
+    ],
+    # Keyed / per-request ensemble or tower products.
+    "ondemand": ["openet", "fluxnet_et"],
 }
 
 #: tier -> default lookback window (days) for an evaluation pull.

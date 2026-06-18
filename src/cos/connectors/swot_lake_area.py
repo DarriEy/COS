@@ -1,0 +1,499 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Darri Eythorsson <dae5@hi.is>
+"""SWOT lake surface-area connector (point network, anonymous).
+
+SWOT (Surface Water and Ocean Topography) lake **surface area** per prior-lake
+feature, served by NASA's **Hydrocron** time-series REST API. Hydrocron
+repackages the SWOT ``SWOT_L2_HR_LakeSP`` (PLD / PriorLake) feature product into
+a tidy per-feature time series and is **anonymous** (confirmed HTTP 200 with no
+Earthdata token, the same access path proven for rivers in
+:mod:`cos.connectors.swot_wse`)::
+
+    GET /hydrocron/v1/timeseries
+        ?feature=PriorLake&feature_id=<lake_id>
+        &start_time=<ISO>&end_time=<ISO>
+        &output=csv&fields=lake_id,time_str,area_total
+
+There is **no SYMFLUENCE native** for SWOT lake area, so parity is
+*spec-validated*: the connector is validated against the published Hydrocron lake
+product spec rather than a native handler. The load-bearing facts encoded here:
+
+* **source unit**: Hydrocron returns ``area_total`` in **km²** (SWOT LakeSP units).
+  The canonical :class:`~cos.core.models.ObservationKind.SURFACE_WATER` unit is
+  ``"fraction"`` (``KIND_UNITS[SURFACE_WATER] == "fraction"``) — a *fractional
+  inundation*: the observed lake extent as a fraction of a reference extent. The
+  boundary conversion is therefore ``fraction = area_total_km2 /
+  reference_area_km2`` (see :data:`DEFAULT_REFERENCE_AREA_KM2` and the
+  ``reference_area_km2`` config / option). A non-km² ``area_total_units`` column,
+  if ever present, is rejected rather than silently mis-scaled. This is the
+  honest unit choice: lake area is a km² quantity, and the only physically
+  meaningful way to express it as the canonical dimensionless ``fraction`` is
+  relative to a reference extent supplied by the domain (the lake's prior /
+  maximum extent). With ``reference_area_km2 == 1.0`` the fraction is numerically
+  the area in km² (the documented identity fallback) so no information is lost
+  when no reference extent is known;
+* **fill / missing**: SWOT uses the sentinel ``-999999999999.0`` for "no
+  observation"; such a value (and any blank / non-finite ``area_total``, and the
+  ``no_data`` ``time_str`` placeholder) maps to :class:`QualityFlag.MISSING`;
+* **valid range**: a finite source area outside the physical band
+  (``VALID_AREA_RANGE_KM2`` — a non-negative area below an absurd planetary
+  ceiling) is treated as fill and masked to MISSING;
+* **window**: ``time_str`` is ISO-8601 UTC (``2024-07-25T22:48:23Z``); the series
+  is trimmed to the half-open UTC interval ``[start, end)``.
+
+A **gridded** path is also provided for completeness (a supplied inundation /
+area raster reduced over the basin via :mod:`cos.core.reduce` — ``basin_mean``
+for larger basins, ``nearest_cell`` for small ones), so the same canonical
+contract covers both a per-lake REST series and a reduced area grid. The primary,
+proven path is the per-lake REST fetch + pure CSV parse.
+"""
+
+from __future__ import annotations
+
+import csv
+import io
+import math
+from datetime import UTC, datetime
+from pathlib import Path
+
+import structlog
+
+from cos.connectors.base import BaseObservationConnector
+from cos.core.exceptions import ConnectorError, DataFormatError, ReductionError
+from cos.core.models import (
+    KIND_UNITS,
+    ObservationKind,
+    ObservationPoint,
+    ObservationSeries,
+    QualityFlag,
+    ReductionSpec,
+    SiteRef,
+    SpatialReduction,
+)
+from cos.core.registry import register
+
+logger = structlog.get_logger()
+
+#: SWOT no-observation sentinel (used for area_total and other measurement fields).
+SWOT_FILL_VALUE = -999999999999.0
+#: Hydrocron emits this placeholder in ``time_str`` for a no-observation pass.
+NO_DATA_TIME = "no_data"
+#: Default reference extent (km²) the source km² area is divided by to yield the
+#: canonical dimensionless ``fraction``. 1.0 km² makes the fraction numerically
+#: equal to the area in km² — the honest identity fallback when the domain has
+#: not supplied a real reference (prior / maximum) lake extent. Override per
+#: domain via ``reference_area_km2`` (config or ``spec.options``).
+DEFAULT_REFERENCE_AREA_KM2 = 1.0
+#: Physically plausible source lake-area band (km²): non-negative, below an
+#: absurd planetary ceiling. A finite area outside this is treated as fill /
+#: corrupt and masked to MISSING (checked in source km² *before* normalization).
+VALID_AREA_RANGE_KM2 = (0.0, 1.0e7)
+#: <= this area (km²) defaults to nearest_cell for the gridded path, mirroring
+#: grace.py's / swot_wse.py's size policy.
+MEDIUM_BASIN_THRESHOLD_KM2 = 1000.0
+#: Area / inundation variable names tried in a supplied NetCDF (gridded path).
+AREA_VARIABLES = ("area_total", "area", "surface_area", "inundation", "fraction", "Band1", "band1")
+
+
+@register("swot_lake_area")
+class SWOTLakeAreaConnector(BaseObservationConnector):
+    slug = "swot_lake_area"
+    display_name = "SWOT Lake Surface Area (Hydrocron)"
+    kind = ObservationKind.SURFACE_WATER
+    structural_class = "point_network"
+    base_url = "https://soto.podaac.earthdatacloud.nasa.gov"
+    auth = frozenset()  # anonymous (Hydrocron public REST)
+
+    #: Hydrocron feature class for prior-lake area time series.
+    DEFAULT_FEATURE = "PriorLake"
+    #: minimal field set the parser needs (units come back automatically).
+    FIELDS = "lake_id,time_str,area_total"
+
+    async def list_sites(self, spec: ReductionSpec) -> list[SiteRef]:
+        """Sites are the explicitly-requested SWOT prior-lake ids.
+
+        SWOT lake discovery by bbox (against the PLD) is a separate (planned)
+        call; today the domain selects lakes by explicit id (``spec.station_ids``),
+        with a single ``feature_id`` / ``station`` config key honoured as a
+        fallback.
+        """
+        feature = self._feature(spec)
+        return [self._site(fid, spec, feature) for fid in self._feature_ids(spec)]
+
+    async def fetch_series(
+        self,
+        spec: ReductionSpec,
+        start: datetime,
+        end: datetime,
+    ) -> list[ObservationSeries]:
+        # Gridded path: reduce a supplied area / inundation raster if configured.
+        nc_path = self.config.get("nc_path") or self.config.get("path")
+        if nc_path:
+            return [self.reduce_file(Path(nc_path), spec, start, end)]
+
+        # Point path: per-lake Hydrocron REST fetch + pure CSV parse.
+        feature = self._feature(spec)
+        reference = self._reference_area_km2(spec)
+        out: list[ObservationSeries] = []
+        for feature_id in self._feature_ids(spec):
+            text = await self._fetch_timeseries(feature, feature_id, start, end)
+            points = self.parse_timeseries(text, start, end, reference_area_km2=reference)
+            out.append(
+                ObservationSeries(
+                    provider=self.slug,
+                    kind=self.kind,
+                    site=self._site(feature_id, spec, feature),
+                    reduction=SpatialReduction.STATION,
+                    unit=KIND_UNITS[self.kind],
+                    points=points,
+                    source_info={
+                        "source": "NASA SWOT (Hydrocron, LakeSP)",
+                        "source_doi": "10.5067/SWOT-LAKESP-2.0",
+                        "url": f"{self.base_url}/hydrocron/v1/timeseries",
+                        "feature": feature,
+                        "feature_id": feature_id,
+                        "reference_area_km2": f"{reference:g}",
+                    },
+                    fetched_at=datetime.now(UTC),
+                )
+            )
+        return out
+
+    async def _fetch_timeseries(
+        self, feature: str, feature_id: str, start: datetime, end: datetime,
+    ) -> str:
+        params = {
+            "feature": feature,
+            "feature_id": feature_id,
+            "start_time": _iso_z(start),
+            "end_time": _iso_z(end),
+            "output": "csv",
+            "fields": self.FIELDS,
+        }
+        resp = await self._get("/hydrocron/v1/timeseries", params=params)
+        return resp.text
+
+    # -- pure parser (hermetically tested, network-free) ---------------------
+
+    @staticmethod
+    def parse_timeseries(
+        text: str,
+        start: datetime,
+        end: datetime,
+        *,
+        reference_area_km2: float = DEFAULT_REFERENCE_AREA_KM2,
+    ) -> list[ObservationPoint]:
+        """Parse a Hydrocron lake CSV time series → canonical SURFACE_WATER points.
+
+        Hydrocron may wrap the CSV in a JSON envelope (``{"results": {"csv":
+        "..."}}``) or return raw CSV; both are accepted. Columns are matched by
+        header name (order-independent): ``time_str`` and ``area_total`` are
+        required.
+
+        Spec-validated behaviour (no native to mirror):
+
+        * ``area_total`` is km² → canonical ``surface_water`` ``fraction`` via
+          ``fraction = area_total_km2 / reference_area_km2``. An
+          ``area_total_units`` column other than km² raises
+          :class:`DataFormatError` rather than silently mis-scaling;
+        * the SWOT fill sentinel ``-999999999999.0``, a blank / non-finite
+          ``area_total``, or a source area outside ``VALID_AREA_RANGE_KM2`` →
+          ``value=None`` with :class:`QualityFlag.MISSING`;
+        * rows whose ``time_str`` is ``no_data`` / unparseable are skipped (no
+          timestamp to anchor a point);
+        * the series is trimmed to the half-open UTC interval ``[start, end)``.
+        """
+        if reference_area_km2 <= 0:
+            raise DataFormatError(
+                "swot_lake_area",
+                f"reference_area_km2 must be > 0 to normalize area to a fraction, "
+                f"got {reference_area_km2!r}.",
+            )
+        csv_text = _unwrap_csv(text)
+        reader = csv.reader(io.StringIO(csv_text))
+        rows = [r for r in reader if any(cell.strip() for cell in r)]
+        if len(rows) < 2:
+            return []
+
+        header = [h.strip().lower() for h in rows[0]]
+        try:
+            time_idx = header.index("time_str")
+        except ValueError as exc:
+            raise DataFormatError(
+                "swot_lake_area", f"Hydrocron CSV missing 'time_str' column: {header}"
+            ) from exc
+        try:
+            area_idx = header.index("area_total")
+        except ValueError as exc:
+            raise DataFormatError(
+                "swot_lake_area", f"Hydrocron CSV missing 'area_total' column: {header}"
+            ) from exc
+        units_idx = header.index("area_total_units") if "area_total_units" in header else None
+
+        start_u = _utc(start)
+        end_u = _utc(end)
+        points: list[ObservationPoint] = []
+        for row in rows[1:]:
+            if len(row) <= max(time_idx, area_idx):
+                continue
+
+            # Reject a non-km² source unit at the boundary (spec contract guard).
+            if units_idx is not None and len(row) > units_idx:
+                unit = row[units_idx].strip().lower()
+                if unit and unit not in {"km2", "km^2", "km²", "sq_km", "square_kilometers"}:
+                    raise DataFormatError(
+                        "swot_lake_area",
+                        f"Hydrocron area_total_units={row[units_idx]!r} is not km²; the "
+                        "SWOT LakeSP area unit is km² — refusing to mis-scale.",
+                    )
+
+            ts = _parse_iso(row[time_idx].strip())
+            if ts is None:  # 'no_data' placeholder or unparseable timestamp
+                continue
+            if not (start_u <= ts < end_u):
+                continue
+            points.append(_make_point(row[area_idx].strip(), ts, reference_area_km2))
+
+        points.sort(key=lambda p: p.timestamp)
+        return points
+
+    # -- gridded path (supplied area / inundation raster) --------------------
+
+    def reduce_file(
+        self,
+        nc_path: Path,
+        spec: ReductionSpec,
+        start: datetime,
+        end: datetime,
+    ) -> ObservationSeries:
+        """Open an area / inundation NetCDF, reduce to the basin, canonicalize.
+
+        The gridded counterpart to the per-lake path: extract the area variable
+        (km²), mask the SWOT fill sentinel / out-of-range cells to NaN, normalize
+        km² → fraction by ``reference_area_km2``, reduce over the basin, and
+        window-trim to half-open UTC ``[start, end)``.
+        """
+        import numpy as np
+        import xarray as xr
+
+        reference = self._reference_area_km2(spec)
+        reduction = self._choose_reduction(spec)
+        with xr.open_dataset(nc_path) as ds:
+            var_name = self._find_area_variable(ds)
+            lats = np.asarray(ds["lat"].values, dtype="float64")
+            lons = np.asarray(ds["lon"].values, dtype="float64")
+            times = np.asarray(ds["time"].values)
+            values = np.asarray(ds[var_name].values, dtype="float64")  # (time, lat, lon)
+
+        values = self._mask_invalid(values) / reference
+
+        from cos.core.reduce import reduce_grid
+
+        point = spec.centroid
+        bbox = spec.bbox
+        if reduction == SpatialReduction.BASIN_MEAN and bbox is None:
+            raise ReductionError("SWOT lake-area basin_mean requires spec.bbox")
+        if reduction != SpatialReduction.BASIN_MEAN and point is None:
+            raise ReductionError("SWOT lake-area nearest_cell requires spec.centroid")
+
+        points = reduce_grid(
+            lats, lons, times, values,
+            reduction=reduction, bbox=bbox, point=point,
+            kind=self.kind, unit=KIND_UNITS[self.kind],
+        )
+
+        start_u = _utc(start)
+        end_u = _utc(end)
+        points = [p for p in points if start_u <= p.timestamp < end_u]
+
+        return ObservationSeries(
+            provider=self.slug,
+            kind=self.kind,
+            site=self._site_for_grid(spec, reduction),
+            reduction=reduction,
+            unit=KIND_UNITS[self.kind],
+            points=points,
+            source_info={
+                "source": "NASA SWOT (gridded lake area)",
+                "url": f"{self.base_url}/hydrocron/v1/timeseries",
+                "variable": var_name,
+                "reference_area_km2": f"{reference:g}",
+            },
+            fetched_at=datetime.now(UTC),
+        )
+
+    @staticmethod
+    def _mask_invalid(values):
+        """Mask the SWOT fill sentinel and out-of-range source-area cells to NaN."""
+        import numpy as np
+
+        lo, hi = VALID_AREA_RANGE_KM2
+        out = np.asarray(values, dtype="float64").copy()
+        invalid = ~np.isfinite(out) | (out == SWOT_FILL_VALUE) | (out < lo) | (out > hi)
+        out[invalid] = np.nan
+        return out
+
+    @staticmethod
+    def _find_area_variable(ds) -> str:
+        for var in AREA_VARIABLES:
+            if var in ds.data_vars:
+                return str(var)
+        suitable = [
+            v for v in ds.data_vars
+            if "area" in str(v).lower() or "inundation" in str(v).lower() or "fraction" in str(v).lower()
+        ]
+        if suitable:
+            return str(suitable[0])
+        raise ConnectorError(
+            "swot_lake_area",
+            f"No area / inundation variable found in dataset. Available: {list(ds.data_vars)}",
+        )
+
+    # -- helpers -------------------------------------------------------------
+
+    def _feature(self, spec: ReductionSpec) -> str:
+        feature = spec.options.get("feature") or self.config.get("feature") or self.DEFAULT_FEATURE
+        return str(feature)
+
+    def _reference_area_km2(self, spec: ReductionSpec) -> float:
+        raw = spec.options.get("reference_area_km2")
+        if raw is None:
+            raw = self.config.get("reference_area_km2")
+        if raw is None:
+            return DEFAULT_REFERENCE_AREA_KM2
+        try:
+            value = float(raw)
+        except (TypeError, ValueError) as exc:
+            raise DataFormatError(
+                "swot_lake_area", f"reference_area_km2={raw!r} is not numeric"
+            ) from exc
+        if value <= 0:
+            raise DataFormatError(
+                "swot_lake_area", f"reference_area_km2 must be > 0, got {value!r}"
+            )
+        return value
+
+    def _feature_ids(self, spec: ReductionSpec) -> list[str]:
+        ids = [s for s in spec.station_ids if s]
+        if not ids:
+            cfg = (
+                self.config.get("station_ids")
+                or self.config.get("feature_ids")
+                or self.config.get("feature_id")
+                or self.config.get("station")
+            )
+            if isinstance(cfg, str):
+                ids = [cfg]
+            elif isinstance(cfg, (list, tuple)):
+                ids = list(cfg)
+        # accept bare "6350900223" and namespaced "swot:6350900223".
+        out: list[str] = []
+        for s in ids:
+            s = str(s)
+            if s.lower().startswith("swot:"):
+                s = s.split(":", 1)[1]
+            out.append(s)
+        return out
+
+    def _site(self, feature_id: str, spec: ReductionSpec, feature: str) -> SiteRef:
+        return SiteRef(
+            kind="station",
+            site_id=f"swot:{feature_id}",
+            latitude=spec.centroid[0] if spec.centroid else None,
+            longitude=spec.centroid[1] if spec.centroid else None,
+            name=f"SWOT {feature} {feature_id}",
+            extra={"network": "SWOT", "feature": feature},
+        )
+
+    def _choose_reduction(self, spec: ReductionSpec) -> SpatialReduction:
+        if spec.reduction is not None:
+            return spec.reduction
+        if spec.area_km2 is not None and spec.area_km2 <= MEDIUM_BASIN_THRESHOLD_KM2:
+            return SpatialReduction.NEAREST_CELL
+        return SpatialReduction.BASIN_MEAN
+
+    def _site_for_grid(self, spec: ReductionSpec, reduction: SpatialReduction) -> SiteRef:
+        if reduction == SpatialReduction.BASIN_MEAN:
+            site_id = f"swot:domain:{spec.domain_name}"
+        else:
+            clat, clon = spec.centroid or (0.0, 0.0)
+            site_id = f"swot:cell:{clat:.3f}_{clon:.3f}"
+        lat = spec.centroid[0] if spec.centroid else None
+        lon = spec.centroid[1] if spec.centroid else None
+        return SiteRef(
+            kind="reduced_region", site_id=site_id, latitude=lat, longitude=lon,
+            name=f"SWOT lake area over {spec.domain_name}",
+        )
+
+
+def _make_point(raw_val: str, ts_utc: datetime, reference_area_km2: float) -> ObservationPoint:
+    """One CSV cell (source km²) → a canonical SURFACE_WATER point (fraction).
+
+    Fill / non-finite / out-of-range source area → MISSING; otherwise the source
+    km² area is normalized to a fraction by ``reference_area_km2``.
+    """
+    if raw_val == "":
+        return ObservationPoint(timestamp=ts_utc, value=None, quality=QualityFlag.MISSING)
+    try:
+        area_km2 = float(raw_val)
+    except ValueError:
+        return ObservationPoint(timestamp=ts_utc, value=None, quality=QualityFlag.MISSING)
+    lo, hi = VALID_AREA_RANGE_KM2
+    if area_km2 == SWOT_FILL_VALUE or not math.isfinite(area_km2) or area_km2 < lo or area_km2 > hi:
+        return ObservationPoint(timestamp=ts_utc, value=None, quality=QualityFlag.MISSING)
+    return ObservationPoint(
+        timestamp=ts_utc, value=area_km2 / reference_area_km2, quality=QualityFlag.GOOD
+    )
+
+
+def _unwrap_csv(text: str) -> str:
+    """Return raw CSV from a Hydrocron body that is raw CSV or a JSON envelope.
+
+    Hydrocron's ``output=csv`` may return the CSV either directly or nested as
+    ``{"results": {"csv": "..."}}`` (or ``{"csv": "..."}``). Anything that is not
+    JSON is treated as raw CSV.
+    """
+    import json
+
+    stripped = text.lstrip()
+    if not stripped.startswith("{"):
+        return text
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return text
+    if isinstance(data, dict):
+        results = data.get("results")
+        if isinstance(results, dict) and isinstance(results.get("csv"), str):
+            return str(results["csv"])
+        if isinstance(data.get("csv"), str):
+            return str(data["csv"])
+    return text
+
+
+def _parse_iso(raw: str) -> datetime | None:
+    """Parse a Hydrocron ``time_str`` (ISO-8601 UTC) → aware UTC datetime.
+
+    Handles the trailing-``Z`` form ``2024-07-25T22:48:23Z`` and offset forms.
+    The ``no_data`` placeholder and anything unparseable return ``None``.
+    """
+    if not raw or raw.lower() == NO_DATA_TIME:
+        return None
+    candidate = raw[:-1] + "+00:00" if raw.endswith(("Z", "z")) else raw
+    try:
+        dt = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    return _utc(dt)
+
+
+def _iso_z(value: datetime) -> str:
+    """Format a datetime as a Hydrocron-friendly ``...Z`` UTC ISO-8601 string."""
+    return _utc(value).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+__all__ = ["SWOTLakeAreaConnector", "QualityFlag", "ObservationPoint"]

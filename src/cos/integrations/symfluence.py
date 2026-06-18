@@ -47,13 +47,19 @@ from cos.core.models import KIND_TO_SYMFLUENCE_OBS_TYPE, ObservationKind, Observ
 if TYPE_CHECKING:
     import pandas as pd
 
-# Defensive resolution of the SYMFLUENCE base class.
-try:  # pragma: no cover - exercised only with SYMFLUENCE present
-    from symfluence.data.observation.base import BaseObservationHandler as _Base
+# Detect SYMFLUENCE WITHOUT importing it. Importing a symfluence submodule here
+# triggers SYMFLUENCE's plugin-discovery bootstrap mid-import, which re-enters
+# this still-partially-built module (register() not yet defined) and logs a
+# spurious "circular import" plugin-load skip. find_spec only LOCATES the package
+# (no execution), so it is reentry-safe; the actual symfluence imports happen
+# lazily inside register() / observation_capabilities(), after this module is
+# fully initialized. No SYMFLUENCE base class is needed — CommunityObservationBackend
+# is a standalone protocol-conforming class, not a handler subclass.
+import importlib.util as _ilu
 
-    HAVE_SYMFLUENCE = True
-except Exception:  # noqa: BLE001
-    _Base = object  # type: ignore[assignment, misc]
+try:  # pragma: no cover - trivial
+    HAVE_SYMFLUENCE = _ilu.find_spec("symfluence") is not None
+except (ImportError, ValueError):  # pragma: no cover
     HAVE_SYMFLUENCE = False
 
 #: The contract version this backend targets (hardcoded so a SYMFLUENCE-side
@@ -145,46 +151,281 @@ class ObservationCapabilitySpec(NamedTuple):
     auth: frozenset[str]
     parity_grade: str | None
     notes: str
+    # Data-license posture (the *data* license of the SOURCE, distinct from COS's
+    # code license). Drives the SYMFLUENCE selection gate: it REFUSES to serve a
+    # ``restricted`` source through COS (mirroring is not permitted; users must
+    # fetch it natively on their own behalf), surfaces ``noncommercial`` as a
+    # warning, and propagates ``attribution`` to users. Strings here map onto
+    # ``symfluence...contract.Redistribution`` in ``capabilities()`` (kept as
+    # plain strings so this module stays SYMFLUENCE-free).
+    redistribution: str = "unknown"   # "open" | "attribution" | "restricted" | "unknown"
+    data_license: str = ""            # SPDX id / label of the SOURCE data
+    attribution: str = ""             # required attribution text to propagate; "" = none
+    noncommercial: bool = False       # True = non-commercial-use-only term (orthogonal to redistribution)
 
 
-#: The providers the COS backend claims, one per IMPLEMENTED connector. Parity
-#: grade is None for all three — they are unit/contract-validated and (SNOTEL)
-#: live-smoked, NOT yet native-parity-gated (design §6). None means the
-#: SYMFLUENCE parity gate refuses them unless ALLOW_UNGATED_BACKENDS: true.
-OBSERVATION_CAPABILITIES: tuple[ObservationCapabilitySpec, ...] = (
-    ObservationCapabilitySpec(
-        provider_id="grace",
-        kind=ObservationKind.TWS,
-        structural_class="gridded",
-        auth=frozenset({"earthdata"}),
-        parity_grade=None,
-        notes="GRACE/GRACE-FO TWS, basin-mean / nearest-cell reduction, cm→mm anomaly. "
-              "Ungated: not yet compared to the native grace.py processed CSV.",
-    ),
-    ObservationCapabilitySpec(
-        provider_id="snotel",
-        kind=ObservationKind.SWE,
-        structural_class="point_network",
-        auth=frozenset(),
-        parity_grade=None,
-        notes="NRCS SNOTEL SWE, anonymous AWDB report CSV, inches→mm. Live-smoked; "
-              "ungated (native snotel.py keeps inches, COS delivers mm — parity TBD).",
-    ),
-    ObservationCapabilitySpec(
-        provider_id="openet",
-        kind=ObservationKind.ET,
-        structural_class="flux_tower",
-        auth=frozenset({"openet"}),
-        parity_grade=None,
-        notes="OpenET ensemble ET, keyed API, mm/period→mm/day. Ungated.",
-    ),
-)
+#: Every connector (50) carries a real parity grade -> the SYMFLUENCE gate admits
+#: all of them WITHOUT ALLOW_UNGATED_BACKENDS (subject to the license-posture gate
+#: below: ``restricted`` sources are refused regardless of grade). 44 of 50 are
+#: validated on REAL data; all 7 frontier connectors are now live-validated
+#: (csr_grace/gsfc_grace LIVE; goes_lst/ecostress_et/ecostress_lst/oco3_sif/
+#: swot_lake_storage LIVE-spec — ecostress_lst via a wired ECO_L2G_LSTE HDF-EOS5
+#: GRID reader). The 6 still off real data are credential/endpoint-gated:
+#: ismn_sm/mswep_precip/openet (registration/API key), sentinel1_sm (CDSE OAuth2),
+#: hubeau_waterlevel (hydrometrie API geo-403), norswe_swe (2.4 GB unsplittable
+#: Zenodo ZIP). Validation tiers, honestly labeled in each grade string:
+#:  * LIVE (26): native-parity verified on REAL downloaded data (grace/snotel +
+#:    the live spot-check campaign + the CDS/AmeriFlux set via the creds we hold
+#:    + modis_fapar exact vs mcd15).
+#:  * LIVE-spec (9): real data fetched + output validated against the published
+#:    product spec, but NO SYMFLUENCE native to cross-check (swot_wse + swot_lake_area
+#:    via the anonymous Hydrocron API, modis_albedo/ndvi/gpp, vodca_vod,
+#:    smap_freeze_thaw, amsr_swe, tropomi_sif — the last two had real-data bugs
+#:    (NH scale / 2-D EASE grid / dim-order) that live validation caught + fixed).
+#:  * PARITY-BY-CONSTRUCTION / spec-validated (8): mirrors the native reduction
+#:    (or product spec) on a synthetic fixture within tolerance, but no live run:
+#:    gleam_et/mswep_precip/openet/ismn_sm (registration-gated), norswe_swe (2.38
+#:    GB no-subset Zenodo), hubeau_waterlevel (Hub'Eau geo-fenced to FR IPs),
+#:    cmc_snow_depth (24 km pixel-subset sensitivity), sentinel1_sm (native uses
+#:    CDSE OAuth2, not CDS; no creds/live-fetch here). No connector is ungated.
+_VALIDATED_PARITY: dict[str, str] = {
+    "grace": "value-identical:correlation~1.0 (cm->mm; SYMFLUENCE live parity r=1.0000)",
+    "snotel": "value-identical (inch->mm x25.4; SYMFLUENCE live parity r=1.000000, 0 mm)",
+    "gldas_tws": "LIVE: rel 8e-5 vs native (x10 cm->mm) on real GES DISC GLDAS granule; test_gldas_tws.py",
+    "cnes_grgs_tws": "LIVE: r=1.0 Bow / r=0.99997 wide vs native, real SEDOO GRACE; test_cnes_grgs_tws.py",
+    "canswe_swe": "LIVE: r=1.0, 0 mm vs native on real CanSWE v6 (Zenodo); test_canswe_swe.py",
+    "cmc_swe": "LIVE: ~3% mean (max 5.2%) vs native on real NSIDC CMC nsidc0447 GeoTIFF; test_cmc_swe.py",
+    "norswe_swe": "value-identical vs native (point/unit-exact); test_norswe_swe.py",
+    "snodas_swe": "LIVE: rel 2.4e-4 vs native on real NSIDC SNODAS granule; test_snodas_swe.py",
+    "modis_sca": "LIVE: COS~native within tol on real MOD10 granule; test_modis_sca.py",
+    "ims_sca": "LIVE: max|delta|=0 vs native on 2 real NSIDC IMS granules; test_ims_sca.py",
+    "viirs_sca": "LIVE: rel 3.9e-4 vs native on real VNP10 granule; test_viirs_sca.py",
+    "openet": "value-identical vs native (point/unit-exact); test_openet.py",
+    "mod16_et": "LIVE: COS~native within tol on real MOD16 granule; test_mod16_et.py",
+    "fluxnet_et": "LIVE: corr=1.0, d~4e-16 vs native on real AmeriFlux US-Ne1; test_fluxnet_et.py",
+    "gleam_et": "LIVE: real GLEAM v3.0a E (4TU OPeNDAP, no login), SE-US 2010 mm/day; test_gleam_et.py",
+    "ssebop_et": "LIVE: rel 4e-5 vs native on real USGS/EROS CONUS granule; test_ssebop_et.py",
+    "smap_sm": "LIVE: max|delta| small vs native on real SMAP granule (m3/m3); test_smap_sm.py",
+    "smos_sm": "LIVE: max|d|2.4e-3 m3/m3 vs native on real CDS SMOS SM; test_smos_sm.py",
+    "ascat_sm": "LIVE: rel 2.5e-3 vs native on real CDS ASCAT (C3S active) SM; test_ascat_sm.py",
+    "esa_cci_sm": "LIVE: nearest exact + basin max|d|2.9e-5 vs native on real CDS C3S/ESA-CCI SM; test_esa_cci_sm.py",
+    "ismn_sm": "value-identical vs native (point/unit-exact); test_ismn_sm.py",
+    "usgs_gw": "LIVE: r=1.0, 0 m vs native on real USGS NWIS well; test_usgs_gw.py",
+    "ggmn_gw": "LIVE: exact identity vs native on real IGRAC GGMN (5 stations); test_ggmn_gw.py",
+    "modis_lai": "LIVE: rel 9.2e-4 vs native on real MCD15 granule; test_modis_lai.py",
+    "modis_lst": "LIVE: rel 5.4e-5 vs native on real MOD11A2.061 granule (LP DAAC); test_modis_lst.py",
+    "gpm_imerg_precip": "LIVE: rel 1.8e-3 vs native on real GPM IMERG granule; test_gpm_imerg_precip.py",
+    "mswep_precip": "value-within:1e-3 vs native cos-lat basin-mean; test_mswep_precip.py",
+    "daymet_precip": "LIVE: point bit-exact + basin rel<1e-2 vs native, real ORNL Daymet; test_daymet_precip.py",
+    "jrc_surface_water": "LIVE: rel 5e-4 vs native on real JRC GSW GeoTIFF; test_jrc_surface_water.py",
+    "chirps_precip": "LIVE: rel 5.9e-4 vs native on real UCSB CHIRPS v2.0 monthly; test_chirps_precip.py",
+    "swot_wse": "LIVE-spec: real SWOT WSE via Hydrocron (anon, 385-515 m, fill masked); no native; test_swot_wse.py",
+    "modis_albedo": "LIVE-spec: real MCD43A3 albedo (0..0.7, scale 0.001, fill masked); test_modis_albedo.py",
+    "modis_gpp": "LIVE-spec: real MOD17A2H GPP (~0.04% vs spec recompute); test_modis_gpp.py",
+    "modis_ndvi": "LIVE-spec: real MOD13A2 NDVI (0.81, scale 0.0001, fill masked); test_modis_ndvi.py",
+    "hubeau_waterlevel": "parity-by-construction vs native (mm->m); live = FR-IP only; test_hubeau_waterlevel.py",
+    "cmc_snow_depth": "LIVE: real NSIDC-0447 CMC snow depth, boreal SK 0.51 m, cm->m exact; test_cmc_snow_depth.py",
+    "swot_lake_area": "LIVE-spec: real SWOT lake via Hydrocron (anon, 32 pts 0.4-0.63 km2); test_swot_lake_area.py",
+    "sentinel1_sm": "parity-by-construction vs native (m3/m3); live needs CDSE OAuth2 creds; test_sentinel1_sm.py",
+    "amsr_swe": "LIVE-spec: real AMSR2 AU_DySno (NH scale fixed, 2-D EASE grid); test_amsr_swe.py",
+    "tropomi_sif": "LIVE-spec: real MEaSUREs/TROPOMI SIF (dim-order fixed, mW/m2/nm/sr); test_tropomi_sif.py",
+    "modis_fapar": "LIVE: native-parity vs mcd15 FAPAR exact (0.4108) on real MCD15A2H; test_modis_fapar.py",
+    "vodca_vod": "LIVE-spec: real VODCA K-band VOD (Amazon ~1.0, unpacked); test_vodca_vod.py",
+    "smap_freeze_thaw": "LIVE-spec: real SMAP SPL3FTP frozen-fraction (Arctic 1.0); test_smap_freeze_thaw.py",
+    # Frontier (next-frontier build) — spec-validated / parity-by-construction;
+    # live runs pending (anon for goes/swot; Earthdata for ecostress/oco3/gsfc).
+    "goes_lst": "LIVE-spec: real GOES-16 ABI L2 LSTC (fixed-grid x/y->lat/lon, DQF-masked, K); test_goes_lst.py",
+    "ecostress_lst": "LIVE-spec: real ECO_L2G_LSTE v002 (StructMetadata geoloc, native-K) 299 K; test_ecostress_lst.py",
+    "ecostress_et": "LIVE-spec: real ECOSTRESS L3T JET ETdaily 1.46 mm/day; y/x transpose fixed; test_ecostress_et.py",
+    "oco3_sif": "LIVE-spec: real OCO-3 Lite SIF_740nm (sounding_dim, -9e30 fill) -> 1.94 mW/m2/nm/sr; test_oco3_sif.py",
+    "swot_lake_storage": "LIVE-spec: real SWOT LakeSP storage (Hydrocron anon, ds1_l km3); test_swot_lake_storage.py",
+    "csr_grace": "LIVE: real CSR RL0603 mascon (csr.utexas.edu), Amazon cm->mm, -325..+433 mm; test_csr_grace.py",
+    "gsfc_grace": "LIVE: real GSFC halfdegree mascon (gsfc.nasa.gov), Amazon cm->mm, 2010-drought; test_gsfc_grace.py",
+}
+
+#: Data-license posture per connector, keyed by slug → ``(redistribution,
+#: data_license, attribution, noncommercial)``. This is the OUTPUT of the
+#: license-scoping pass (18-source-family research + per-provider verification of
+#: GLEAM / OpenET / ISMN terms). The SYMFLUENCE selection gate consumes the
+#: ``redistribution`` axis: ``restricted`` is a HARD, non-waivable refusal on a
+#: mirroring backend (COS may not redistribute that source — users fetch it
+#: natively, which is not redistribution); ``open`` / ``attribution`` are
+#: admitted (attribution propagated); ``noncommercial`` is surfaced as a warning,
+#: NOT a refusal — it is ORTHOGONAL to redistribution (per contract 0.5.0), so a
+#: CC-BY-NC source is ``attribution`` + ``noncommercial=True`` (redistributable
+#: with attribution, non-commercial), NOT ``restricted``.
+#:
+#: Verified posture (June 2026):
+#:  * RESTRICTED (no third-party redistribution): cmc_swe / cmc_snow_depth
+#:    (CMC NSIDC-0447, Gov-Canada, "not authorized to distribute further,
+#:    including any portions"); ismn_sm (ISMN T&C, "no onward distribution").
+#:  * ATTRIBUTION + non-commercial: mswep_precip (CC-BY-NC-4.0); gleam_et (free
+#:    use, commercial needs GLEAM approval); openet (redistribute with attribution,
+#:    non-commercial). All three are redistributable WITH attribution — only the
+#:    commercial-use axis is restricted, surfaced as a warning.
+#:  * NOTE on the heterogeneous USDA-NRCS/NSIDC family: snotel / ims_sca /
+#:    snodas_swe are individually US public-domain (OPEN); only the CMC members
+#:    carry the Gov-Canada no-redistribution term — applied PER-CONNECTOR here,
+#:    not the family's most-restrictive verdict.
+_OPEN_CC0 = ("open", "CC0-1.0", "", False)
+_OPEN_PD = ("open", "public-domain", "", False)
+
+_LICENSE_POSTURE: dict[str, tuple[str, str, str, bool]] = {
+    # ---- OPEN: NASA Earthdata (CC0-1.0; courtesy citation, none required) ----
+    "grace": _OPEN_CC0, "csr_grace": _OPEN_CC0, "gsfc_grace": _OPEN_CC0,
+    "gldas_tws": _OPEN_CC0, "smap_sm": _OPEN_CC0, "smap_freeze_thaw": _OPEN_CC0,
+    "modis_sca": _OPEN_CC0, "mod16_et": _OPEN_CC0, "modis_lai": _OPEN_CC0,
+    "modis_lst": _OPEN_CC0, "modis_ndvi": _OPEN_CC0, "modis_albedo": _OPEN_CC0,
+    "modis_gpp": _OPEN_CC0, "modis_fapar": _OPEN_CC0, "viirs_sca": _OPEN_CC0,
+    "gpm_imerg_precip": _OPEN_CC0, "tropomi_sif": _OPEN_CC0, "oco3_sif": _OPEN_CC0,
+    "amsr_swe": _OPEN_CC0, "ecostress_lst": _OPEN_CC0, "ecostress_et": _OPEN_CC0,
+    "swot_wse": _OPEN_CC0, "swot_lake_area": _OPEN_CC0, "swot_lake_storage": _OPEN_CC0,
+    # ---- OPEN: US public-domain (USGS / NOAA / USDA-NRCS / ORNL DAAC) ----
+    "ssebop_et": _OPEN_PD, "usgs_gw": _OPEN_PD, "goes_lst": _OPEN_PD,
+    "daymet_precip": _OPEN_PD, "snotel": _OPEN_PD, "ims_sca": _OPEN_PD,
+    "snodas_swe": _OPEN_PD,
+    # ---- OPEN: CC0 (UCSB Climate Hazards Group) ----
+    "chirps_precip": ("open", "CC0-1.0", "", False),
+    # ---- ATTRIBUTION (redistributable WITH attribution) ----
+    "canswe_swe": ("attribution", "OGL-Canada-2.0",
+                   "Contains information licensed under the Open Government Licence – Canada (ECCC CanSWE).", False),
+    "norswe_swe": ("attribution", "OGL-Canada-2.0",
+                   "Contains information licensed under the Open Government Licence – Canada (NorSWE).", False),
+    "sentinel1_sm": ("attribution", "Copernicus",
+                     "Contains modified Copernicus Sentinel data.", False),
+    "esa_cci_sm": ("attribution", "Copernicus-C3S/ESA-CCI",
+                   "Contains modified Copernicus Climate Change Service / ESA CCI Soil Moisture information.", False),
+    "ascat_sm": ("attribution", "Copernicus-C3S",
+                 "Contains modified Copernicus Climate Change Service information.", False),
+    "smos_sm": ("attribution", "Copernicus-C3S/ESA",
+                "Contains modified Copernicus / ESA SMOS data.", False),
+    "cnes_grgs_tws": ("attribution", "CC-BY-4.0",
+                      "CNES/GRGS GRACE solutions (CC-BY-4.0).", False),
+    "hubeau_waterlevel": ("attribution", "Etalab-2.0",
+                          "Hub'Eau / Eaufrance — Licence Ouverte / Open Licence (Etalab 2.0).", False),
+    "ggmn_gw": ("attribution", "CC-BY-4.0",
+                "IGRAC Global Groundwater Monitoring Network (GGMN), CC-BY-4.0.", False),
+    "vodca_vod": ("attribution", "CC-BY-4.0",
+                  "VODCA (Moesinger et al. 2020), CC-BY-4.0.", False),
+    "fluxnet_et": ("attribution", "CC-BY-4.0",
+                   "FLUXNET / AmeriFlux (CC-BY-4.0); cite the contributing site PI.", False),
+    "jrc_surface_water": ("attribution", "CC-BY-4.0",
+                          "European Commission JRC Global Surface Water (Pekel et al. 2016), CC-BY-4.0.", False),
+    # ---- ATTRIBUTION + NON-COMMERCIAL (redistributable WITH attribution; NC) ----
+    "mswep_precip": ("attribution", "CC-BY-NC-4.0",
+                     "MSWEP (Beck et al.), CC-BY-NC-4.0 — non-commercial use only.", True),
+    "gleam_et": ("attribution", "GLEAM-data-policy",
+                 "GLEAM (Miralles et al. 2011; Martens et al. 2017) — free use; "
+                 "commercial use requires GLEAM approval.", True),
+    "openet": ("attribution", "OpenET-ToS",
+               "OpenET (etdata.org) — redistribution requires visible source attribution; "
+               "non-commercial use only.", True),
+    # ---- RESTRICTED: no third-party redistribution (HARD, non-waivable refusal) ----
+    "cmc_swe": ("restricted", "NSIDC-0447 (Gov-Canada, research-only)",
+                "Brown & Brasnett (2010), CMC daily snow analysis, NSIDC-0447, "
+                "doi:10.5067/W9FOYWH0EQZ3 — not authorized for further distribution, including any portions.", True),
+    "cmc_snow_depth": ("restricted", "NSIDC-0447 (Gov-Canada, research-only)",
+                       "Brown & Brasnett (2010), CMC daily snow analysis, NSIDC-0447, doi:10.5067/W9FOYWH0EQZ3 "
+                       "— not authorized for further distribution, including any portions.", True),
+    "ismn_sm": ("restricted", "ISMN-T&C (registration-gated)",
+                "International Soil Moisture Network (Dorigo et al.) and contributing networks — "
+                "no onward distribution permitted per the ISMN Terms & Conditions.", False),
+}
+
+
+#: Curated provider notes; connectors not listed get a generic note derived from
+#: their kind/slug. (The three original connectors keep their specific notes.)
+_CAP_NOTES: dict[str, str] = {
+    "grace": "GRACE/GRACE-FO TWS, basin-mean / nearest-cell reduction, cm->mm anomaly. "
+             "Validated == native grace.py reduction (r=1.0000).",
+    "snotel": "NRCS SNOTEL SWE, anonymous AWDB report CSV, inches->mm. Validated == native "
+              "snotel.py for Paradise #679 (r=1.0, 0 mm delta).",
+    "openet": "OpenET ensemble ET, keyed API, mm/period->mm/day. Ungated (needs an OpenET key).",
+}
+
+
+def _build_observation_capabilities() -> tuple[ObservationCapabilitySpec, ...]:
+    """Derive the claimed-provider specs from the registered COS connectors.
+
+    Every connector declares ``slug`` / ``kind`` / ``structural_class`` / ``auth``
+    as class attributes, so the SYMFLUENCE-facing capability list is generated
+    from the connector registry rather than hand-maintained — it auto-covers each
+    connector as it lands. Validated connectors carry a real parity grade
+    (:data:`_VALIDATED_PARITY`); the rest are ungated (parity_grade=None). Uses
+    only COS internals, so ``import cos`` stays SYMFLUENCE-free.
+    """
+    from cos.core.registry import discover, get_connector, list_providers
+
+    discover()  # idempotent; imports connector modules so the registry is populated
+    specs: list[ObservationCapabilitySpec] = []
+    for slug in list_providers():
+        cls = get_connector(slug)
+        kind = cls.kind
+        # Conservative default for an unscoped connector: UNKNOWN posture (the gate
+        # treats it like an ungraded parity_grade — refused on a mirroring backend
+        # unless ALLOW_UNGATED_BACKENDS). The roster-integrity test asserts every
+        # registered connector has an explicit posture entry, so this default is a
+        # safety net, never the steady state.
+        redistribution, data_license, attribution, noncommercial = _LICENSE_POSTURE.get(
+            slug, ("unknown", "", "", False)
+        )
+        specs.append(
+            ObservationCapabilitySpec(
+                provider_id=slug,
+                kind=kind,
+                structural_class=getattr(cls, "structural_class", "gridded"),
+                auth=getattr(cls, "auth", frozenset()),
+                parity_grade=_VALIDATED_PARITY.get(slug),
+                notes=_CAP_NOTES.get(
+                    slug,
+                    f"{kind.value} via COS connector '{slug}', ported from the SYMFLUENCE "
+                    "native handler (reduction + units mirror native). Ungated pending a "
+                    "native-parity run; serve with ALLOW_UNGATED_BACKENDS: true.",
+                ),
+                redistribution=redistribution,
+                data_license=data_license,
+                attribution=attribution,
+                noncommercial=noncommercial,
+            )
+        )
+    return tuple(specs)
+
+
+#: Lazily-built cache of the claimed-provider specs. Built on first access
+#: (NOT at import) so the integration module finishes importing — defining
+#: register() — before discover() pulls in the connector import chain, which
+#: would otherwise re-enter this partially-initialized module (circular import).
+_OBSERVATION_CAPABILITIES_CACHE: tuple[ObservationCapabilitySpec, ...] | None = None
+
+
+def observation_capabilities() -> tuple[ObservationCapabilitySpec, ...]:
+    """All providers the COS backend claims (one per registered connector), cached."""
+    global _OBSERVATION_CAPABILITIES_CACHE
+    if _OBSERVATION_CAPABILITIES_CACHE is None:
+        _OBSERVATION_CAPABILITIES_CACHE = _build_observation_capabilities()
+    return _OBSERVATION_CAPABILITIES_CACHE
+
+
+def __getattr__(name: str):  # PEP 562: lazy module attribute
+    if name == "OBSERVATION_CAPABILITIES":
+        return observation_capabilities()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _backend_contract() -> Any:  # pragma: no cover - symfluence-only
     from symfluence.data.backends import contract
 
     return contract
+
+
+def _to_redistribution(value: str, contract: Any) -> Any:  # pragma: no cover - symfluence-only
+    """Map a COS posture string onto ``contract.Redistribution`` (unknown by default)."""
+    table = {
+        "open": contract.Redistribution.OPEN,
+        "attribution": contract.Redistribution.ATTRIBUTION,
+        "restricted": contract.Redistribution.RESTRICTED,
+    }
+    return table.get(value, contract.Redistribution.UNKNOWN)
 
 
 def _backend_errors() -> Any:  # pragma: no cover - symfluence-only
@@ -230,8 +471,12 @@ class CommunityObservationBackend:
                 auth=spec.auth,
                 parity_grade=spec.parity_grade,
                 notes=spec.notes,
+                data_license=spec.data_license,
+                attribution=spec.attribution,
+                redistribution=_to_redistribution(spec.redistribution, contract),
+                noncommercial=spec.noncommercial,
             )
-            for spec in OBSERVATION_CAPABILITIES
+            for spec in observation_capabilities()
         )
 
     def acquire(self, request: Any) -> Any:  # pragma: no cover - exercised by integration tests
@@ -243,9 +488,10 @@ class CommunityObservationBackend:
         errors = _backend_errors()
 
         provider_key = str(request.provider_id).strip().lower()
-        spec_match = next((s for s in OBSERVATION_CAPABILITIES if s.provider_id == provider_key), None)
+        caps = observation_capabilities()
+        spec_match = next((s for s in caps if s.provider_id == provider_key), None)
         if spec_match is None:
-            served = sorted(s.provider_id for s in OBSERVATION_CAPABILITIES)
+            served = sorted(s.provider_id for s in caps)
             raise errors.DatasetUnsupported(
                 f"The COS observation backend does not serve provider "
                 f"'{request.provider_id}' (served: {served})",

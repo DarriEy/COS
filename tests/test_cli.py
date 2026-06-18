@@ -5,12 +5,17 @@ from click.testing import CliRunner
 from cos.cli.main import cli
 
 
-def test_providers_lists_three_implemented():
+def test_providers_lists_all_registered():
+    from cos.core.registry import discover, list_providers
+
+    discover()
+    n = len(list_providers())
     result = CliRunner().invoke(cli, ["providers"])
     assert result.exit_code == 0
-    for slug in ("grace", "snotel", "openet"):
+    # the proof connectors plus the built-out roster are all listed
+    for slug in ("grace", "snotel", "openet", "smap_sm", "chirps_precip", "usgs_gw"):
         assert slug in result.output
-    assert "3 connectors registered" in result.output
+    assert f"{n} connectors registered" in result.output
 
 
 def test_kinds_lists_units():

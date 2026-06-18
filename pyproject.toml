@@ -35,10 +35,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Gridded connectors (GRACE etc.) read NetCDF via xarray.
+# Gridded connectors (GRACE etc.) read NetCDF via xarray; the gridded ECOSTRESS
+# HDF-EOS5 product (ECO_L2G_LSTE) is read via h5py.
 gridded = [
     "xarray>=2024.1",
     "netcdf4>=1.6",
+    "h5py>=3.0",
 ]
 pandas = [
     "pandas>=2.0",
@@ -55,6 +57,7 @@ dev = [
     "respx>=0.21",
     "xarray>=2024.1",
     "netcdf4>=1.6",
+    "h5py>=3.0",
     "pandas>=2.0",
     "ruff>=0.4",
     "mypy>=1.10",
@@ -131,6 +134,8 @@ module = [
     "pandas", "pandas.*",
     "xarray", "xarray.*",
     "netCDF4", "netCDF4.*",
+    "rasterio", "rasterio.*",
+    "h5py", "h5py.*",
     "symfluence", "symfluence.*",
 ]
 ignore_missing_imports = true

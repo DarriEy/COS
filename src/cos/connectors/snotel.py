@@ -147,8 +147,16 @@ class SNOTELConnector(BaseObservationConnector):
                 ids = [cfg]
             elif isinstance(cfg, (list, tuple)):
                 ids = list(cfg)
-        # accept both bare "679" and namespaced "snotel:679"
-        return [s.split(":", 1)[-1] for s in ids]
+        # accept bare "679", namespaced "snotel:679", AND full AWDB triplets
+        # "679:WA:SNTL". Only strip a leading "snotel:" namespace — splitting on
+        # any ":" mangles a full triplet (679:WA:SNTL -> WA:SNTL).
+        out: list[str] = []
+        for s in ids:
+            if s.lower().startswith("snotel:"):
+                out.append(s.split(":", 1)[1])
+            else:
+                out.append(s)
+        return out
 
     def _triplet(self, station_id: str, spec: ReductionSpec) -> str:
         """AWDB station triplet ``<id>:<state>:SNTL``."""
