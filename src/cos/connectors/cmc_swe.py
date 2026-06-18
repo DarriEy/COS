@@ -47,7 +47,6 @@ from cos.core.models import (
     ObservationKind,
     ObservationPoint,
     ObservationSeries,
-    QualityFlag,
     ReductionSpec,
     SiteRef,
     SpatialReduction,

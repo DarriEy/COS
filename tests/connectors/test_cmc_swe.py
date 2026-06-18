@@ -348,7 +348,7 @@ def test_read_geotiff_reprojects_projected_crs_to_geographic(tmp_path):
     # Axes must be GEOGRAPHIC and in the northern high latitudes (the bug gave
     # lats ~0..20). Longitudes within [-180, 180].
     assert lats.min() > 40.0 and lats.max() <= 90.0
-    assert -180.0 <= lons.min() and lons.max() <= 180.0
+    assert lons.min() >= -180.0 and lons.max() <= 180.0
     assert depth_cm.shape[0] == 1
     # The constant 40 cm field survives reprojection where data exists.
     assert np.nanmax(depth_cm) == pytest.approx(40.0, abs=1e-6)

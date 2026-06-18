@@ -191,7 +191,7 @@ _VALIDATED_PARITY: dict[str, str] = {
     "usgs_gw": "LIVE: r=1.0, 0 m vs native on real USGS NWIS well; test_usgs_gw.py",
     "ggmn_gw": "LIVE: exact identity vs native on real IGRAC GGMN (5 stations); test_ggmn_gw.py",
     "modis_lai": "LIVE: rel 9.2e-4 vs native on real MCD15 granule; test_modis_lai.py",
-    "modis_lst": "LIVE: max|delta| 0.016 K, rel 5.4e-5 vs native on real MOD11A2.061 granule (LP DAAC); test_modis_lst.py",
+    "modis_lst": "LIVE: rel 5.4e-5 vs native on real MOD11A2.061 granule (LP DAAC); test_modis_lst.py",
     "gpm_imerg_precip": "LIVE: rel 1.8e-3 vs native on real GPM IMERG granule; test_gpm_imerg_precip.py",
     "mswep_precip": "value-within:1e-3 vs native cos-lat basin-mean; test_mswep_precip.py",
     "daymet_precip": "LIVE: point bit-exact + basin rel<1e-2 vs native, real ORNL Daymet; test_daymet_precip.py",
