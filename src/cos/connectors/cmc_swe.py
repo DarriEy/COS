@@ -141,7 +141,7 @@ class CMCSnowSWEConnector(BaseObservationConnector):
 
         import numpy as np
         import rasterio
-        from rasterio.warp import transform as warp_transform
+        from rasterio.warp import Resampling, calculate_default_transform, reproject
 
         m = re.search(r"(\d{4})", path.name)
         if not m:
@@ -149,25 +149,37 @@ class CMCSnowSWEConnector(BaseObservationConnector):
         year = int(m.group(1))
 
         with rasterio.open(path) as src:
-            data = src.read().astype("float64")  # (bands, rows, cols)
             nodata = src.nodata
-            transform = src.transform
-            crs = src.crs
-            rows, cols = src.height, src.width
+            if src.crs is not None and not src.crs.is_geographic:
+                # The CMC product is Polar Stereographic: lat/lon vary in 2D and
+                # CANNOT be factored into 1D axes by warping a single row/column
+                # (that produced physically-wrong axes and dropped every real NH
+                # bbox). Reproject the whole raster onto a REGULAR EPSG:4326 grid
+                # so lat/lon are true 1D axes that reduce_grid can consume.
+                dst_crs = "EPSG:4326"
+                dst_transform, dst_w, dst_h = calculate_default_transform(
+                    src.crs, dst_crs, src.width, src.height, *src.bounds
+                )
+                data = np.full((src.count, dst_h, dst_w), np.nan, dtype="float64")
+                for b in range(src.count):
+                    reproject(
+                        source=rasterio.band(src, b + 1),
+                        destination=data[b],
+                        src_transform=src.transform, src_crs=src.crs,
+                        dst_transform=dst_transform, dst_crs=dst_crs,
+                        src_nodata=nodata, dst_nodata=np.nan,
+                        resampling=Resampling.nearest,
+                    )
+                transform, rows, cols = dst_transform, dst_h, dst_w
+            else:
+                data = src.read().astype("float64")  # (bands, rows, cols)
+                transform, rows, cols = src.transform, src.height, src.width
 
-            # Cell-center lon/lat for each row/col, in EPSG:4326.
+            # Cell-center lon/lat for each row/col on the (now-regular) grid.
             col_idx = np.arange(cols) + 0.5
             row_idx = np.arange(rows) + 0.5
-            xs = transform.c + transform.a * col_idx  # x at each column center
-            ys = transform.f + transform.e * row_idx  # y at each row center
-            if crs is not None and not crs.is_geographic:
-                xs_lon, _ = warp_transform(crs, "EPSG:4326", xs.tolist(), [ys[0]] * cols)
-                _, ys_lat = warp_transform(crs, "EPSG:4326", [xs[0]] * rows, ys.tolist())
-                lons = np.asarray(xs_lon, dtype="float64")
-                lats = np.asarray(ys_lat, dtype="float64")
-            else:
-                lons = xs.astype("float64")
-                lats = ys.astype("float64")
+            lons = (transform.c + transform.a * col_idx).astype("float64")
+            lats = (transform.f + transform.e * row_idx).astype("float64")
 
         if nodata is not None:
             data[data == nodata] = np.nan

@@ -317,3 +317,50 @@ def test_parity_window_half_open_vs_native_inclusive():
     # and the kept values equal native (uniform field)
     for p in series.points:
         assert p.value == pytest.approx(_native_swe_mm(depth[0], 200.0), abs=1e-9)
+
+
+def test_read_geotiff_reprojects_projected_crs_to_geographic(tmp_path):
+    """Regression: the live spot-check found _read_geotiff produced bogus 1D axes
+    for the CMC Polar Stereographic GeoTIFF (warping one row/col), placing every
+    real NH bbox outside the grid -> zero points. It must reproject the raster to
+    a REGULAR EPSG:4326 grid so lat/lon are true 1D axes. This exercises the
+    previously-0%-covered geo frontend on a genuinely projected raster.
+    """
+    rasterio = pytest.importorskip("rasterio")
+    from rasterio.transform import from_origin
+
+    # 1-band 8x8 grid in a PROJECTED CRS (EPSG:3857 Web Mercator) over a real
+    # mid-latitude NH box (~50N, ~-117E), constant 40 cm snow depth, 25 km cells.
+    # Web Mercator is non-geographic so it exercises the reproject branch (the
+    # fix) without the polar-stereographic degeneracy a pole-side origin causes.
+    arr = np.full((1, 8, 8), 40.0, dtype="float32")
+    transform = from_origin(-1.300e7, 6.70e6, 25_000.0, 25_000.0)
+    path = tmp_path / "cmc_swe_depth_2020.tif"
+    with rasterio.open(
+        path, "w", driver="GTiff", height=8, width=8, count=1, dtype="float32",
+        crs="EPSG:3857", transform=transform, nodata=-9999.0,
+    ) as dst:
+        dst.write(arr)
+
+    conn = CMCSnowSWEConnector()
+    lats, lons, times, depth_cm = conn._read_geotiff(path)
+
+    # Axes must be GEOGRAPHIC and in the northern high latitudes (the bug gave
+    # lats ~0..20). Longitudes within [-180, 180].
+    assert lats.min() > 40.0 and lats.max() <= 90.0
+    assert -180.0 <= lons.min() and lons.max() <= 180.0
+    assert depth_cm.shape[0] == 1
+    # The constant 40 cm field survives reprojection where data exists.
+    assert np.nanmax(depth_cm) == pytest.approx(40.0, abs=1e-6)
+
+    # Full path: reduce over the data's own lat/lon extent -> finds cells (not the
+    # zero-point failure) and returns the constant depth converted to SWE.
+    spec = ReductionSpec(
+        domain_name="np",
+        bbox=(float(lats.min()), float(lons.min()), float(lats.max()), float(lons.max())),
+        centroid=(float(np.median(lats)), float(np.median(lons))),
+        area_km2=50_000.0,
+    )
+    series = conn.reduce_file(path, spec, datetime(2020, 1, 1, tzinfo=UTC), datetime(2021, 1, 1, tzinfo=UTC))
+    assert series.points, "reduce_file must find cells in the reprojected grid (not zero points)"
+    assert any(p.value is not None for p in series.points)
