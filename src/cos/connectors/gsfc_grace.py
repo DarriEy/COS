@@ -22,8 +22,8 @@ Product / access (GSFC mascon, served as NetCDF):
 This connector:
 
 1. opens a GSFC mascon NetCDF (a local cached file supplied via config
-   ``nc_path`` / ``path`` — Earthdata/PO.DAAC download is not wired here, the
-   reduce + canonicalize path is the proven part);
+   ``nc_path`` / ``path``, or live-fetched from the open GSFC host when none is
+   supplied — :meth:`_live_fetch` downloads :data:`LIVE_URL` to the cache);
 2. extracts ``lat / lon / time / lwe_thickness`` as numpy arrays, normalising the
    dim order to ``(time, lat, lon)`` so a granule shipped ``(lat, lon, time)``
    reduces correctly;
@@ -90,6 +90,13 @@ class GSFCGRACEConnector(BaseObservationConnector):
     base_url = "https://earth.gsfc.nasa.gov"
     auth = frozenset({"earthdata"})
 
+    #: Open GSFC RL06 v2.0 half-degree mascon — anonymous direct download (no
+    #: Earthdata auth needed for this mirror). Override via config ``live_url``.
+    LIVE_URL = (
+        "https://earth.gsfc.nasa.gov/sites/default/files/geo/"
+        "gsfc.glb_.200204_202603_rl06v2.0_obp-ice6gd_halfdegree.nc"
+    )
+
     async def list_sites(self, spec: ReductionSpec) -> list[SiteRef]:
         """One reduced region: the basin (or its centroid cell)."""
         reduction = self._choose_reduction(spec)
@@ -101,15 +108,20 @@ class GSFCGRACEConnector(BaseObservationConnector):
         start: datetime,
         end: datetime,
     ) -> list[ObservationSeries]:
-        path = self.config.get("nc_path") or self.config.get("path")
-        if not path:
-            raise ConnectorError(
-                self.slug,
-                "GSFC GRACE live fetch needs a cached NetCDF (config 'nc_path'/'path') "
-                "or Earthdata/PO.DAAC download (not yet wired). The reduce + canonicalize "
-                "path is the proven part; supply a GSFC mascon TWS NetCDF to reduce it.",
-            )
+        path = self.config.get("nc_path") or self.config.get("path") or self._live_fetch()
         return [self.reduce_file(Path(path), spec, start, end)]
+
+    def _live_fetch(self) -> str:
+        """Download the open GSFC half-degree mascon to the cache, return its path.
+
+        One anonymous global NetCDF covers the full record, so the basin reduction
+        + window-trim happen from this single file; cached so repeats fetch once.
+        """
+        from cos.core.fetch import cache_dir, http_download
+
+        url = str(self.config.get("live_url") or self.LIVE_URL)
+        dest = cache_dir(self.config) / url.rsplit("/", 1)[-1]
+        return str(http_download(url, dest, slug=self.slug))
 
     # -- file reader (extract arrays, then defer to the pure core) -----------
 

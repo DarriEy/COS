@@ -92,8 +92,22 @@ def test_window_trim_half_open(grace_nc):
 
 
 @pytest.mark.asyncio
-async def test_fetch_series_without_ncpath_errors():
+async def test_fetch_series_live_fetches_when_no_path(grace_nc, monkeypatch):
+    """With no nc_path, fetch_series live-fetches the JPL mascon via Earthdata and
+    reduces it. The earthaccess download is mocked to the synthetic fixture (no
+    network); this asserts the wiring (no path -> _live_fetch -> earthaccess_granules
+    -> reduce_file)."""
+    from cos.core import fetch as cos_fetch
+
+    seen = {}
+
+    def fake_granules(short_name, version, temporal, bbox, dest_dir, **kw):
+        seen["short_name"] = short_name
+        return [grace_nc]
+    monkeypatch.setattr(cos_fetch, "earthaccess_granules", fake_granules)
+
     conn = GRACEConnector()
     spec = ReductionSpec(domain_name="x", bbox=(50.0, -116.0, 52.0, -114.0), centroid=(51.0, -115.0))
-    with pytest.raises(Exception, match="NetCDF"):
-        await conn.fetch_series(spec, datetime(2020, 1, 1, tzinfo=UTC), datetime(2021, 1, 1, tzinfo=UTC))
+    series = await conn.fetch_series(spec, datetime(2020, 1, 1, tzinfo=UTC), datetime(2021, 1, 1, tzinfo=UTC))
+    assert seen["short_name"] == GRACEConnector.EARTHDATA_SHORTNAME
+    assert series and series[0].unit == "mm" and series[0].kind.value == "tws"

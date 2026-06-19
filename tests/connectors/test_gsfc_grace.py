@@ -193,12 +193,32 @@ def test_native_parity_by_construction():
 
 
 @pytest.mark.asyncio
-async def test_fetch_series_without_path_errors():
-    conn = GSFCGRACEConnector()
-    with pytest.raises(Exception, match="NetCDF"):
-        await conn.fetch_series(
-            _spec(), datetime(2020, 1, 1, tzinfo=UTC), datetime(2021, 1, 1, tzinfo=UTC)
-        )
+async def test_fetch_series_live_fetches_when_no_path(tmp_path, monkeypatch):
+    """With no path, fetch_series live-downloads the GSFC mascon and reduces it.
+
+    The anonymous download is mocked to a synthetic mascon fixture (no network);
+    asserts the wiring (no path -> _live_fetch -> http_download -> reduce_file)."""
+    xr = pytest.importorskip("xarray")
+    pytest.importorskip("netCDF4")
+    from cos.core import fetch as cos_fetch
+
+    ds = xr.Dataset(
+        {"lwe_thickness": (("time", "lat", "lon"), _grid_cm())},
+        coords={"time": TIMES, "lat": LATS, "lon": LONS},
+    )
+    fixture = tmp_path / "gsfc_mascon.nc"
+    ds.to_netcdf(fixture)
+    seen = {}
+
+    def fake_download(url, dest, **kw):
+        seen["url"] = url
+        return fixture
+    monkeypatch.setattr(cos_fetch, "http_download", fake_download)
+
+    conn = GSFCGRACEConnector(config={"cache_dir": str(tmp_path)})
+    series = await conn.fetch_series(_spec(), datetime(2020, 1, 1, tzinfo=UTC), datetime(2021, 1, 1, tzinfo=UTC))
+    assert seen["url"] == GSFCGRACEConnector.LIVE_URL
+    assert series and series[0].unit == "mm" and series[0].kind.value == "tws"
 
 
 @pytest.mark.network

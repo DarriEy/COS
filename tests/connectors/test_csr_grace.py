@@ -238,6 +238,35 @@ def _native_mascon_nc(tmp_path):
     return path
 
 
+def test_fetch_series_live_fetches_when_no_path(tmp_path, monkeypatch):
+    """With no nc_path, fetch_series live-fetches the mascon and reduces it.
+
+    The live download is mocked to return a synthetic mascon fixture (no network);
+    this asserts the wiring (no config path -> _live_fetch -> http_download ->
+    reduce_file), not the real CSR endpoint (that is the network-marked smoke).
+    """
+    import asyncio
+
+    from cos.core import fetch as cos_fetch
+
+    fixture = _native_mascon_nc(tmp_path)
+    calls = {}
+
+    def fake_download(url, dest, **kw):
+        calls["url"] = url
+        return fixture
+    monkeypatch.setattr(cos_fetch, "http_download", fake_download)
+
+    conn = CSRGRACEConnector(config={"cache_dir": str(tmp_path)})
+    start, end = _full_window()
+    series = asyncio.run(conn.fetch_series(_basin_spec(), start, end))
+
+    assert calls["url"] == CSRGRACEConnector.LIVE_URL  # used the open CSR mascon URL
+    assert len(series) == 1
+    assert series[0].unit == "mm" and series[0].kind.value == "tws"
+    assert any(p.value is not None for p in series[0].points)
+
+
 def test_parity_with_native_jpl_mascon_reduction(tmp_path):
     """CSR mascon reduces identically to the JPL mascon (same native reduction).
 
@@ -285,13 +314,15 @@ async def test_list_sites_one_reduced_region():
 
 
 @pytest.mark.network
-@pytest.mark.live
 @pytest.mark.asyncio
-async def test_live_csr_download_not_wired():
-    """Live fetch without a cached file raises a clear ConnectorError (download unwired)."""
-    from cos.core.exceptions import ConnectorError
+async def test_live_csr_download_and_reduce(tmp_path):
+    """LIVE smoke: with no cached file, fetch_series live-downloads the real CSR
+    mascon (anonymous) and reduces it to a TWS anomaly series.
 
-    conn = CSRGRACEConnector()
+    Run: pytest -m network tests/connectors/test_csr_grace.py -k live
+    """
+    conn = CSRGRACEConnector(config={"cache_dir": str(tmp_path)})
     start, end = _full_window()
-    with pytest.raises(ConnectorError):
-        await conn.fetch_series(_basin_spec(), start, end)
+    series = await conn.fetch_series(_basin_spec(), start, end)
+    assert series and series[0].unit == "mm" and series[0].kind.value == "tws"
+    assert any(p.value is not None for p in series[0].points)
