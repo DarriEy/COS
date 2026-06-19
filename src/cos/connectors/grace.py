@@ -6,8 +6,10 @@ Proves the **gridded spatial-reduction path** of the canonical contract. GRACE
 mascon products are global monthly liquid-water-equivalent thickness grids
 (``lwe_thickness``, cm) served as NetCDF behind NASA Earthdata. This connector:
 
-1. opens a GRACE NetCDF (a local cached file, or a downloaded one — Earthdata
-   auth via the resolved credential token);
+1. opens a GRACE NetCDF (a local cached file supplied via config ``nc_path``, or
+   live-fetched from PO.DAAC when none is supplied — :meth:`_live_fetch` searches
+   + downloads the JPL mascon via ``earthaccess`` using ``~/.netrc`` Earthdata
+   credentials, raising AuthRequiredError when they are absent);
 2. extracts ``lat / lon / time / lwe_thickness`` as numpy arrays;
 3. reduces to the basin via :mod:`cos.core.reduce` — ``basin_mean`` for larger
    basins, ``nearest_cell`` for small ones (the size policy the native
@@ -58,6 +60,11 @@ class GRACEConnector(BaseObservationConnector):
 
     VARIABLE = "lwe_thickness"
 
+    #: PO.DAAC JPL RL06.1 CRI mascon (single global record file) — Earthdata auth.
+    #: Override via config ``earthdata_short_name`` / ``earthdata_version``.
+    EARTHDATA_SHORTNAME = "TELLUS_GRAC-GRFO_MASCON_CRI_GRID_RL06.1_V3"
+    EARTHDATA_VERSION = "3"
+
     async def list_sites(self, spec: ReductionSpec) -> list[SiteRef]:
         """One reduced region: the basin (or its centroid cell)."""
         reduction = self._choose_reduction(spec)
@@ -69,15 +76,31 @@ class GRACEConnector(BaseObservationConnector):
         start: datetime,
         end: datetime,
     ) -> list[ObservationSeries]:
-        nc_path = self.config.get("nc_path")
-        if not nc_path:
-            raise ConnectorError(
-                self.slug,
-                "GRACE live fetch needs a NetCDF path (config 'nc_path') or Earthdata "
-                "download (not yet wired). The reduction path is the proven part; "
-                "supply a downloaded GRACE mascon NetCDF to reduce it.",
-            )
+        nc_path = self.config.get("nc_path") or self._live_fetch(spec, start, end)
         return [self.reduce_file(Path(nc_path), spec, start, end)]
+
+    def _live_fetch(self, spec: ReductionSpec, start: datetime, end: datetime) -> str:
+        """Download the JPL mascon from PO.DAAC via Earthdata, return its path.
+
+        The JPL CRI mascon is a single global record file, so one granule covers
+        the window; reduced + window-trimmed from that file. Needs ``~/.netrc``
+        Earthdata credentials (raises AuthRequiredError otherwise -> the SYMFLUENCE
+        routing then falls back to the native handler).
+        """
+        from cos.core.fetch import cache_dir, earthaccess_granules
+
+        granules = earthaccess_granules(
+            str(self.config.get("earthdata_short_name") or self.EARTHDATA_SHORTNAME),
+            str(self.config.get("earthdata_version") or self.EARTHDATA_VERSION),
+            (start.date().isoformat(), end.date().isoformat()),
+            bbox=None,  # single global mascon file
+            dest_dir=cache_dir(self.config),
+            slug=self.slug,
+            count=1,
+        )
+        if not granules:
+            raise ConnectorError(self.slug, "Earthdata returned no GRACE mascon granule")
+        return str(granules[0])
 
     # -- the architecture-critical, hermetically-tested core -----------------
 

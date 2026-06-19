@@ -15,8 +15,8 @@ monthly liquid-water-equivalent-thickness grid (variable ``lwe_thickness``, cm)
 served as NetCDF on a 0-360 longitude grid. This connector:
 
 1. opens the CSR mascon NetCDF (a local cached file supplied via config
-   ``nc_path`` / ``path`` — live CSR/PO.DAAC download is not wired here, exactly
-   as the other gridded connectors; the reduce + canonicalize path is proven);
+   ``nc_path`` / ``path``, or live-fetched from the open CSR host when none is
+   supplied — :meth:`_live_fetch` downloads :data:`LIVE_URL` to the cache);
 2. extracts ``lat / lon / time / lwe_thickness`` as numpy arrays, normalizing the
    dimension order to ``(time, lat, lon)`` (the CSR mascon ships ``(time, lat,
    lon)`` but the reorder is defensive against ``(lat, lon, time)`` real-data
@@ -81,6 +81,13 @@ class CSRGRACEConnector(BaseObservationConnector):
 
     VARIABLE = VARIABLE
 
+    #: Open CSR RL0603 mascon (all-corrections) — anonymous, no Earthdata auth.
+    #: Override via config ``live_url`` when a newer release supersedes it.
+    LIVE_URL = (
+        "https://download.csr.utexas.edu/outgoing/grace/RL0603_mascons/"
+        "CSR_GRACE_GRACE-FO_RL0603_Mascons_all-corrections.nc"
+    )
+
     async def list_sites(self, spec: ReductionSpec) -> list[SiteRef]:
         """One reduced region: the basin (or its centroid cell)."""
         reduction = self._choose_reduction(spec)
@@ -92,16 +99,21 @@ class CSRGRACEConnector(BaseObservationConnector):
         start: datetime,
         end: datetime,
     ) -> list[ObservationSeries]:
-        nc_path = self.config.get("nc_path") or self.config.get("path")
-        if not nc_path:
-            raise ConnectorError(
-                self.slug,
-                "CSR GRACE live fetch needs a NetCDF path (config 'nc_path'/'path') "
-                "to a CSR RL06 mascon file (CSR_GRACE_GRACE-FO_RL0603_Mascons_*.nc) "
-                "or a CSR/PO.DAAC download (not yet wired). The reduction path is the "
-                "proven part; supply a downloaded CSR mascon NetCDF to reduce it.",
-            )
+        nc_path = self.config.get("nc_path") or self.config.get("path") or self._live_fetch()
         return [self.reduce_file(Path(nc_path), spec, start, end)]
+
+    def _live_fetch(self) -> str:
+        """Download the open CSR mascon (single global file) to the cache, return its path.
+
+        The CSR RL0603 mascon is one anonymous NetCDF covering the full record, so
+        the basin reduction + window-trim happen entirely from this one file — no
+        per-window granule search. Cached, so repeated reductions fetch once.
+        """
+        from cos.core.fetch import cache_dir, http_download
+
+        url = str(self.config.get("live_url") or self.LIVE_URL)
+        dest = cache_dir(self.config) / url.rsplit("/", 1)[-1]
+        return str(http_download(url, dest, slug=self.slug))
 
     # -- file reader (extract arrays, then defer to the pure core) -----------
 

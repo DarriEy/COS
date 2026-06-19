@@ -42,6 +42,14 @@ gridded = [
     "netcdf4>=1.6",
     "h5py>=3.0",
 ]
+# Live-fetch of Earthdata-gated gridded products (GRACE JPL mascon, ...).
+earthdata = [
+    "earthaccess>=0.9",
+]
+# Live HTTP download with OS-native cert verification (incomplete-chain hosts).
+livehttp = [
+    "truststore>=0.9",
+]
 pandas = [
     "pandas>=2.0",
 ]
@@ -58,6 +66,7 @@ dev = [
     "xarray>=2024.1",
     "netcdf4>=1.6",
     "h5py>=3.0",
+    "earthaccess>=0.9",
     "pandas>=2.0",
     "ruff>=0.4",
     "mypy>=1.10",
@@ -136,6 +145,11 @@ module = [
     "netCDF4", "netCDF4.*",
     "rasterio", "rasterio.*",
     "h5py", "h5py.*",
+    "earthaccess", "earthaccess.*",
+    "truststore", "truststore.*",
     "symfluence", "symfluence.*",
 ]
 ignore_missing_imports = true
+# Don't type-check these third-party sources: some (earthaccess) ship py.typed
+# and use 3.12+ `type` syntax that trips mypy's python_version=3.11 target.
+follow_imports = "skip"
