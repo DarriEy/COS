@@ -1,0 +1,100 @@
+name: CI Auto-Triage
+
+# When CI finishes red on the default branch, an automated Claude agent investigates
+# the failure, posts a report, and acts per policy. Scoped to the default branch so a
+# single failure produces exactly one triage (PR-branch CI failures are not triaged,
+# which also prevents recursion on claude/autofix/* fix branches).
+# See .github/claude-triage-guide.md for the classification rules and contract.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+# Exactly one triage per failing commit.
+concurrency:
+  group: ci-autotriage-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+  id-token: write
+
+jobs:
+  triage:
+    # Only red CI, only on the default branch (excludes PR-branch and autofix-branch runs).
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'failure' &&
+          github.event.workflow_run.head_branch == github.event.repository.default_branch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.ANTHROPIC_API_KEY_OAUTH }}
+          show_full_output: "true"
+          prompt: |
+            You are an automated CI triage agent. Be careful, minimal, and honest —
+            you are operating unattended on a real repository.
+
+            Failure context (from the triggering event):
+            - Repository:    ${{ github.repository }}
+            - Failed run:    "${{ github.event.workflow_run.name }}" (id ${{ github.event.workflow_run.id }})
+            - Head branch:   ${{ github.event.workflow_run.head_branch }}
+            - Head SHA:      ${{ github.event.workflow_run.head_sha }}
+            - Run URL:       ${{ github.event.workflow_run.html_url }}
+
+            Do these in order:
+
+            1. Read `.github/claude-triage-guide.md` in this repo and follow it. It defines this
+               service's classifications, its canonical contract, and the SCOPE RULE.
+
+            2. Fetch the failure logs and find the precise root cause (file, test, error type):
+               `gh run view ${{ github.event.workflow_run.id }} --repo ${{ github.repository }} --log-failed`
+
+            3. Classify into exactly one of:
+               adapter_drift | data_drift | contract_change | tooling_drift | outage | real_bug | other
+
+            4. ALWAYS post a concise markdown report (root cause, classification + why, proposed
+               action) as a commit comment on the failing SHA:
+               `gh api repos/${{ github.repository }}/commits/${{ github.event.workflow_run.head_sha }}/comments -f body=@<file>`
+               Title it "🤖 CI triage: <classification>".
+
+            5. Act on the classification:
+               - adapter_drift OR data_drift: create branch
+                 `claude/autofix/${{ github.event.workflow_run.id }}`, make the MINIMAL fix
+                 confined to `src/cos/connectors/` and/or `tests/` ONLY, commit, push, and open a
+                 PR with `gh pr create --label claude-autofix --label automerge-on-green`.
+               - contract_change OR tooling_drift: create the same branch, open a PR with your best
+                 proposed fix, but label it `--label claude-autofix --label needs-human-review`
+                 (NOT automerge-on-green). Explain why a human must merge.
+               - outage / real_bug / other: DO NOT open a fix PR. The report is the deliverable.
+
+            THE SCOPE RULE (decisive): an adapter_drift/data_drift fix may change ONLY files under
+            `src/cos/connectors/` or `tests/`. If your minimal fix would touch ANY other path
+            (pyproject.toml, .github/, src/cos/core/, docs, packaging), it is NOT
+            adapter/data drift — reclassify as tooling_drift (build/CI/deps) or contract_change
+            (src/cos/core/) and use the human-gated path. "Upstream changed" means a data
+            PROVIDER, not a library like numpy or mypy. The auto-merge job independently refuses
+            any PR that changes files outside connectors//tests/, so mislabeling cannot cause a
+            bad auto-merge.
+
+            Other hard rules:
+            - Never modify files under src/cos/core/ in a drift autofix.
+            - Keep changes minimal and scoped to the root cause. No drive-by refactors.
+            - Never disable, skip, or weaken tests (or deselect via the network marker) to go green.
+            - If you are not confident, classify as `other` and report only.
+            - If `gh pr create --label X` fails because a label is missing, create it with
+              `gh label create X` and retry.
+          claude_args: |
+            --model claude-sonnet-4-6
+            --max-turns 40
+            --allowedTools Bash,Read,Edit,Write,Grep,Glob

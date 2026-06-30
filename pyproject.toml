@@ -129,7 +129,10 @@ exclude_lines = [
 ]
 
 [tool.mypy]
-python_version = "3.11"
+# Target 3.12 so mypy can parse the PEP 695 `type` statement that numpy's 2.x
+# bundled stubs use (it rejects that syntax under a <3.12 target). Runtime support
+# stays at >=3.11; the codebase itself uses no 3.12-only syntax.
+python_version = "3.12"
 warn_return_any = true
 disallow_untyped_defs = false
 check_untyped_defs = true
