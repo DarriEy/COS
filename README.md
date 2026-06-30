@@ -85,6 +85,26 @@ streamflow through the observation-backend tier today; the other kinds go throug
 separate per-kind evaluation paths. Wiring COS into the pipeline is a required
 SYMFLUENCE-side follow-up, out of scope for this repo. See `cos_design.md` §4.
 
+## Automated CI triage
+
+When CI fails on `main`, a Claude Code agent (`.github/workflows/ci-autotriage.yml`) reads the
+failure, posts a triage report as a commit comment, and classifies it:
+
+| Classification | Action |
+| --- | --- |
+| `adapter_drift` / `data_drift` — a data provider changed; fix confined to `connectors/`/`tests/` | fix PR labeled `automerge-on-green`, **auto-merged once CI passes** |
+| `contract_change` — touches `src/cos/core/` | PR labeled `needs-human-review` (a human merges) |
+| `tooling_drift` — build / CI / dependency / packaging | PR labeled `needs-human-review` (a human merges) |
+| `outage` / `real_bug` / `other` | report only, no code change |
+
+**Safety:** the auto-merge workflow (`autofix-automerge.yml`) merges a PR only if its entire diff is
+within `connectors/`/`tests/` — a misclassified change can never auto-merge, regardless of label.
+Claude authenticates via the `ANTHROPIC_API_KEY_OAUTH` repo secret. Pause anytime with
+`gh workflow disable "CI Auto-Triage" -R DarriEy/COS`.
+
+Labels: `claude-autofix` (agent-opened) · `automerge-on-green` (drift fix, self-merges on green) ·
+`needs-human-review` (needs a human).
+
 ## License
 
 GPL-3.0-or-later (matches CSFS and SYMFLUENCE).
