@@ -12,14 +12,15 @@ boundary. One connector wraps one upstream product/provider.
 
 ## Classifications and actions
 
-Pick exactly one. The action column is enforced by the workflows — the auto-merge job
-**only** merges `adapter_drift`/`data_drift` fixes, and **only** when every changed file is
-under `src/cos/connectors/` or `tests/`.
+Pick exactly one. The action column is enforced by the workflows — the auto-merge job merges **only** `adapter_drift`/`data_drift` fixes, **only** when every
+changed file is under `src/<svc>/connectors/` or `tests/`, **only** when the fix does not change
+an expected value/assertion (the *truth gate*), and **only** when the connector has not tripped
+the *circuit breaker* (repeated recent autofixes).
 
 | Classification | What it means | Action |
 |---|---|---|
 | `adapter_drift` | A **data provider** changed something a connector consumes (endpoint, variable/band, scale factor, fill/flag sentinel, units, grid). Fixable **entirely inside `src/cos/connectors/<slug>.py`** and/or its test. | Fix PR → **auto-merge on green** |
-| `data_drift` | Contract and live provider are fine, but a recorded fixture / expected value in a test is stale. Fixable inside `connectors/` or `tests/`. | Fix PR → **auto-merge on green** |
+| `data_drift` | Contract and live provider are fine, but a recorded fixture / expected value in a test is stale. Fixable inside `connectors/` or `tests/`. | Fix PR → **human merge** — truth gate (expected-value change) |
 | `contract_change` | The failure involves the canonical schema/contract — anything under `src/cos/core/` (`models.py`: `SiteRef`, `ObservationSeries`, the `KIND_UNITS` map, `ObservationKind`) or `BaseObservationConnector`. | Fix PR → **human merge** |
 | `tooling_drift` | A build / CI / dependency / tooling failure: mypy or ruff config, a dependency version bump (numpy, xarray, …), type stubs, packaging, or the CI workflow itself. Also the **roster-integrity** test (`tests/test_connector_integrity.py`) failing because a connector isn't registered/tiered/inventoried — unless the right fix is purely in `connectors/`. **Not** a data-provider change. | Fix PR → **human merge** |
 | `outage` | Transient external failure: HTTP 429/5xx, DNS, connection timeouts, provider/auth-service hiccups. | **Report only** (recommend re-run) |
@@ -47,6 +48,30 @@ Both take the **human-gated** path (label `needs-human-review`, never `automerge
 "Upstream changed" applies to **data providers**, not to libraries like numpy/mypy. The
 auto-merge job will refuse to merge any PR that changes files outside `connectors/`/`tests/`,
 even if mislabeled.
+
+## The truth gate (enforced by the auto-merge job — read before touching `tests/`)
+
+You may auto-fix **how a connector fetches or parses** (endpoints, variable/band/coverage
+ids, dimension order, response fields) — that is `adapter_drift`, and it auto-merges on green.
+You may **not** silently auto-canonize **what the truth is**. The auto-merge job scans the diff
+and routes to a human any change to an **expected value / assertion under `tests/`**: a changed
+number, a `units` string, a CRS/`EPSG` code, or a quality-flag enum
+(`GOOD`/`SUSPECT`/`PARTIAL`/`MISSING`/`DEGRADED`/`ESTIMATED`).
+
+Why: updating a stale recorded expectation and rubber-stamping a provider that has silently
+started serving wrong data (a units flip, a compromised layer, a swapped coverage) are the
+**same edit** — you cannot tell them apart from inside CI. So a `data_drift` fix that changes an
+expected value is **human-gated**, not auto-merged. Label it `needs-human-review`, make the
+minimal fixture change, and explain in the PR why the new value is the correct truth. Test
+changes that only touch **mocks / setup / imports** (not an expected value) still auto-merge.
+
+## The circuit breaker (enforced by the auto-merge job)
+
+If the same connector has been auto-fixed **3+ times in 7 days**, auto-merge pauses for that
+connector and a `needs-human-review` tracking issue opens. Repeated mechanical drift on one
+provider is itself the signal that the **provider relationship** needs a person — a staged
+endpoint deprecation, a churning coverage id, an auth/format change in flight — not another
+squash-merge. Nothing you can do in a fix PR bypasses this; it is deliberate.
 
 ## CI commands (what "green" means here)
 
