@@ -1,11 +1,25 @@
 name: Autofix Auto-Merge
 
-# When CI passes on a claude/autofix/* branch, squash-merge the fix PR — but only if:
-#   1. it is labeled automerge-on-green and NOT needs-human-review, AND
-#   2. every changed file is under src/<svc>/connectors/ or tests/ (deterministic scope
-#      gate — blocks a misclassified non-connector fix from auto-merging regardless of
-#      how the triage agent labeled it).
-# This is the "merge when CI greens" half of the triage system.
+# When CI passes on a claude/autofix/* branch, squash-merge the fix PR — but only if it
+# clears FOUR independent, deterministic gates that do NOT rely on the triage agent's
+# judgement (the agent shares a failure mode with the thing being checked):
+#
+#   1. LABEL GATE      — labeled automerge-on-green and NOT needs-human-review.
+#   2. SCOPE GATE      — every changed file is under src/<SVC>/connectors/ or tests/,
+#                        where SVC is derived from the repository name (not a wildcard),
+#                        so a fix that invents src/anything/connectors/ cannot pass.
+#   3. TRUTH GATE      — the PR may change how we FETCH (connector code) but not what the
+#                        TRUTH is: any changed expected-value / assertion in tests/ (a
+#                        number, a units string, a CRS/EPSG code, or a quality-flag enum)
+#                        routes to a human. A stale-fixture refresh and a provider serving
+#                        garbage are byte-identical fixes; only a human should canonize a
+#                        new expected value. Bias is toward human review on ambiguity.
+#   4. CIRCUIT BREAKER — if this connector has already been auto-fixed N+ times in the
+#                        last WINDOW days, stop auto-merging it and open a needs-human
+#                        issue: repeated drift means a provider relationship needs a person.
+#
+# This is the "merge when CI greens" half of the triage system; see
+# .github/claude-triage-guide.md for the classification contract.
 
 on:
   workflow_run:
@@ -15,6 +29,13 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write
+
+env:
+  # Circuit-breaker policy: trip if this many prior autofix merges already touched the
+  # same connector within the window.
+  CB_THRESHOLD: "3"
+  CB_WINDOW_DAYS: "7"
 
 jobs:
   automerge:
@@ -30,6 +51,11 @@ jobs:
           BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           set -euo pipefail
+
+          # Per-repo service slug (fixes the src/[^/]+/ wildcard): cas, cfs, csfs, cos.
+          SVC=$(echo "$REPO" | cut -d/ -f2 | tr '[:upper:]' '[:lower:]')
+          echo "Service slug: $SVC"
+
           pr=$(gh pr list -R "$REPO" --head "$BRANCH" --state open \
                  --json number,labels --jq '.[0]')
           if [ -z "$pr" ] || [ "$pr" = "null" ]; then
@@ -37,27 +63,95 @@ jobs:
           fi
           number=$(echo "$pr" | jq -r '.number')
           labels=$(echo "$pr" | jq -r '[.labels[].name]')
+
+          # Relabel the PR for a human and post a comment body from a file.
+          # $1 = path to a markdown body file.
+          relabel_human() {
+            gh pr edit -R "$REPO" "$number" \
+              --remove-label automerge-on-green --add-label needs-human-review 2>/dev/null || true
+            gh pr comment -R "$REPO" "$number" --body-file "$1" || true
+          }
+
+          # ---- Gate 1: label eligibility ----
           has_automerge=$(echo "$labels" | jq -r 'index("automerge-on-green") // empty')
           has_human=$(echo "$labels"     | jq -r 'index("needs-human-review") // empty')
-
           if [ -z "$has_automerge" ] || [ -n "$has_human" ]; then
             echo "PR #$number not label-eligible for auto-merge (labels: $labels) — leaving for a human."
             exit 0
           fi
 
-          # Deterministic scope gate: every changed file must be a connector or a test.
+          # ---- Gate 2: scope (deterministic, per-repo slug) ----
           files=$(gh pr diff -R "$REPO" "$number" --name-only)
           echo "Changed files:"; echo "$files"
-          out_of_scope=$(echo "$files" | grep -vE '^(src/[^/]+/connectors/|tests/)' || true)
+          out_of_scope=$(echo "$files" | grep -vE "^(src/${SVC}/connectors/|tests/)" || true)
           if [ -n "$out_of_scope" ]; then
-            echo "PR #$number changes files outside connectors/ or tests/ — refusing auto-merge:"
-            echo "$out_of_scope"
-            gh pr edit -R "$REPO" "$number" \
-              --remove-label automerge-on-green --add-label needs-human-review 2>/dev/null || true
-            gh pr comment -R "$REPO" "$number" --body \
-              "🤖 Auto-merge blocked: this PR changes files outside \`connectors/\`/\`tests/\`, which is out of scope for an adapter/data-drift autofix. Relabeled \`needs-human-review\` for a human to evaluate."
+            echo "Out of scope:"; echo "$out_of_scope"
+            printf '%s\n' "🤖 Auto-merge blocked (**scope gate**): this PR changes files outside \`src/${SVC}/connectors/\`/\`tests/\`, which is out of scope for an adapter/data-drift autofix. Relabeled \`needs-human-review\`." > /tmp/body.md
+            relabel_human /tmp/body.md
             exit 0
           fi
 
-          echo "PR #$number is drift-eligible, in scope, and green — squash-merging."
+          # ---- Gate 3: truth gate — no auto-canonizing a changed expected value ----
+          # Scan the unified diff; within tests/*.py hunks, flag any added/removed line that
+          # carries an expected value or a semantic token (units / CRS / EPSG / quality-flag
+          # enum / assertion). Pure connector-code fixes and test mock/setup/import edits
+          # pass; a changed assertion does not. False positives cost a human glance; a false
+          # negative would launder provider-served garbage into a green squash commit.
+          diff=$(gh pr diff -R "$REPO" "$number")
+          tripwire=$(printf '%s\n' "$diff" | awk '
+            /^\+\+\+ b\// { p=substr($0,7); intest=(p ~ /^tests\/.*\.py$/); next }
+            /^--- / { next }
+            /^@@/   { next }
+            (intest && /^[+-]/ && !/^(\+\+\+|---)/) {
+              if ($0 ~ /assert|approx|==|!=|\bunits\b|EPSG|epsg|\bcrs\b|GOOD|SUSPECT|PARTIAL|MISSING|DEGRADED|ESTIMATED/) print
+            }
+          ')
+          if [ -n "$tripwire" ]; then
+            echo "Truth-gate tripwire — changed expected values in tests/:"; echo "$tripwire"
+            {
+              printf '%s\n\n' "🤖 Auto-merge blocked (**truth gate**): this PR changes one or more **expected values / assertions** under \`tests/\` — a number, units string, CRS/EPSG code, or quality-flag enum. Updating a recorded expectation to match reality-as-served is indistinguishable, by any check the agent could run, from canonizing a provider that has silently started serving wrong data. A human must confirm the new expected value is correct. Relabeled \`needs-human-review\`."
+              printf '%s\n' "Flagged lines:"
+              printf '%s\n' '```diff'
+              printf '%s\n' "$tripwire"
+              printf '%s\n' '```'
+            } > /tmp/body.md
+            relabel_human /tmp/body.md
+            exit 0
+          fi
+
+          # ---- Gate 4: circuit breaker — repeated drift on the same connector ----
+          conns=$(echo "$files" | grep -E "^src/${SVC}/connectors/.*\.py$" || true)
+          if [ -n "$conns" ]; then
+            cutoff=$(date -u -d "${CB_WINDOW_DAYS} days ago" +%s)
+            merged=$(gh pr list -R "$REPO" --state merged --label claude-autofix --limit 100 \
+                       --json number,mergedAt,files 2>/dev/null || echo '[]')
+            for conn in $conns; do
+              count=$(printf '%s' "$merged" | jq --arg conn "$conn" --argjson cutoff "$cutoff" '
+                [ .[]
+                  | select(.mergedAt != null and (.mergedAt|fromdateiso8601) >= $cutoff)
+                  | select([.files[]?.path] | index($conn)) ] | length')
+              echo "Connector $conn: $count prior autofix merge(s) in last ${CB_WINDOW_DAYS}d (threshold ${CB_THRESHOLD})."
+              if [ "$count" -ge "${CB_THRESHOLD}" ]; then
+                title="🚨 Repeated drift autofixes: $conn"
+                existing=$(gh issue list -R "$REPO" --state open --search "in:title $conn" \
+                             --json number,title --jq \
+                             "[.[] | select(.title==\"$title\")][0].number" 2>/dev/null || true)
+                if [ -z "$existing" ] || [ "$existing" = "null" ]; then
+                  printf '%s\n\n%s\n' \
+                    "The circuit breaker tripped: \`$conn\` has been auto-fixed **${count}** time(s) in the last ${CB_WINDOW_DAYS} days (threshold ${CB_THRESHOLD}). Auto-merge is now **paused** for this connector." \
+                    "Repeated automated drift on one connector usually means the provider relationship itself needs attention (an endpoint being deprecated in stages, a coverage/layer id churning, an auth or format change in flight) rather than another mechanical fixture refresh. A person should look at the recent autofix PRs for this connector before it is trusted to auto-merge again. Close this issue to re-arm auto-merge." > /tmp/issue.md
+                  gh issue create -R "$REPO" --title "$title" --label needs-human-review --body-file /tmp/issue.md || true
+                else
+                  gh issue comment -R "$REPO" "$existing" --body \
+                    "Circuit breaker tripped again on PR #$number (now ${count} merges in ${CB_WINDOW_DAYS}d). Still paused." || true
+                fi
+                printf '%s\n' "🤖 Auto-merge blocked (**circuit breaker**): \`$conn\` has been auto-fixed ${count}× in the last ${CB_WINDOW_DAYS} days (threshold ${CB_THRESHOLD}). Repeated drift is a signal the provider relationship needs a human, not another squash-merge. Tracking issue opened; relabeled \`needs-human-review\`." > /tmp/body.md
+                relabel_human /tmp/body.md
+                exit 0
+              fi
+            done
+          fi
+
+          # ---- All gates cleared ----
+          echo "PR #$number cleared all gates (label, scope, truth, circuit breaker) — squash-merging."
           gh pr merge -R "$REPO" "$number" --squash --delete-branch

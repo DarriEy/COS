@@ -69,10 +69,16 @@ jobs:
                Title it "🤖 CI triage: <classification>".
 
             5. Act on the classification:
-               - adapter_drift OR data_drift: create branch
-                 `claude/autofix/${{ github.event.workflow_run.id }}`, make the MINIMAL fix
-                 confined to `src/cos/connectors/` and/or `tests/` ONLY, commit, push, and open a
-                 PR with `gh pr create --label claude-autofix --label automerge-on-green`.
+               - adapter_drift (a connector-CODE fix — endpoint/id/band/field/parse): create branch
+                 `claude/autofix/${{ github.event.workflow_run.id }}`, make the MINIMAL fix confined to
+                 `src/cos/connectors/` and/or `tests/` ONLY, commit, push, and open a PR with
+                 `gh pr create --label claude-autofix --label automerge-on-green`.
+
+               - data_drift (a fix that changes an EXPECTED VALUE / assertion in `tests/` — a
+                 number, units string, CRS/EPSG, or quality-flag enum): create the same branch and make the
+                 minimal fixture change, but label it `--label claude-autofix --label needs-human-review`
+                 (NOT automerge-on-green) and explain WHY the new value is the correct truth. The auto-merge
+                 job's truth gate will bounce any expected-value change that is mislabeled automerge-on-green.
                - contract_change OR tooling_drift: create the same branch, open a PR with your best
                  proposed fix, but label it `--label claude-autofix --label needs-human-review`
                  (NOT automerge-on-green). Explain why a human must merge.
