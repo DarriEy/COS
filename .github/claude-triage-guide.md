@@ -51,27 +51,38 @@ even if mislabeled.
 
 ## The truth gate (enforced by the auto-merge job — read before touching `tests/`)
 
-You may auto-fix **how a connector fetches or parses** (endpoints, variable/band/coverage
-ids, dimension order, response fields) — that is `adapter_drift`, and it auto-merges on green.
-You may **not** silently auto-canonize **what the truth is**. The auto-merge job scans the diff
-and routes to a human any change to an **expected value / assertion under `tests/`**: a changed
-number, a `units` string, a CRS/`EPSG` code, or a quality-flag enum
-(`GOOD`/`SUSPECT`/`PARTIAL`/`MISSING`/`DEGRADED`/`ESTIMATED`).
+You may auto-fix **how a connector fetches or parses** (endpoints, variable/band/coverage ids,
+dimension order, response fields) — that is `adapter_drift`, and it auto-merges on green. You may
+**not** silently auto-canonize **what the truth is**. The auto-merge job scans the diff and routes
+to a human:
 
-Why: updating a stale recorded expectation and rubber-stamping a provider that has silently
-started serving wrong data (a units flip, a compromised layer, a swapped coverage) are the
-**same edit** — you cannot tell them apart from inside CI. So a `data_drift` fix that changes an
-expected value is **human-gated**, not auto-merged. Label it `needs-human-review`, make the
-minimal fixture change, and explain in the PR why the new value is the correct truth. Test
-changes that only touch **mocks / setup / imports** (not an expected value) still auto-merge.
+- **Any change to a non-`.py` file under `tests/`** — a recorded fixture / response / blob
+  (`.json`, `.csv`, `.nc`, parquet, pickle, …). "Refresh the recording to what the provider now
+  serves" is exactly the garbage-canonization case and it carries no keyword, so the whole file
+  class is gated on sight.
+- **In `tests/*.py`**: a changed assertion, a semantic token (a `units` string, a CRS/`EPSG` code,
+  a quality-flag enum `GOOD`/`SUSPECT`/`PARTIAL`/`MISSING`/`DEGRADED`/`ESTIMATED`), an
+  `expected`/`EXPECTED` constant, **or any changed line carrying a bare numeric literal** — this
+  catches `EXPECTED_DEM_MEAN = 132.4 → 187.2`, whose value moves without an `assert` or `==` on
+  the line.
 
-## The circuit breaker (enforced by the auto-merge job)
+Why: updating a stale recorded expectation and rubber-stamping a provider that has silently started
+serving wrong data (a units flip, a compromised layer, a swapped coverage) are the **same edit** —
+you cannot tell them apart from inside CI. So a `data_drift` fix that changes an expected value is
+**human-gated**, not auto-merged. Label it `needs-human-review`, make the minimal change, and
+explain in the PR why the new value is the correct truth. Keyword-free, number-free test changes
+that only touch **mocks / setup / imports** still auto-merge.
 
-If the same connector has been auto-fixed **3+ times in 7 days**, auto-merge pauses for that
-connector and a `needs-human-review` tracking issue opens. Repeated mechanical drift on one
-provider is itself the signal that the **provider relationship** needs a person — a staged
-endpoint deprecation, a churning coverage id, an auth/format change in flight — not another
-squash-merge. Nothing you can do in a fix PR bypasses this; it is deliberate.
+## The circuit breaker (a human-controlled latch, enforced by the auto-merge job)
+
+The **tracking issue is the breaker state**. While a `🚨 Repeated drift autofixes: <connector>`
+issue is **open**, auto-merge is paused for that connector — full stop. **Closing the issue
+re-arms** auto-merge, and only autofix merges *after* the close count toward the next trip (so the
+merges that tripped it do not immediately re-trip). The first trip fires when a connector has been
+auto-fixed **3+ times in 7 days** (and since the last re-arm). Repeated mechanical drift on one
+provider is itself the signal that the **provider relationship** needs a person — a staged endpoint
+deprecation, a churning coverage id, an auth/format change in flight — not another squash-merge.
+Nothing you can do in a fix PR bypasses this; the human's close is the only re-arm.
 
 ## CI commands (what "green" means here)
 
