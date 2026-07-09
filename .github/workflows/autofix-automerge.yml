@@ -92,18 +92,36 @@ jobs:
           fi
 
           # ---- Gate 3: truth gate — no auto-canonizing a changed expected value ----
-          # Scan the unified diff; within tests/*.py hunks, flag any added/removed line that
-          # carries an expected value or a semantic token (units / CRS / EPSG / quality-flag
-          # enum / assertion). Pure connector-code fixes and test mock/setup/import edits
-          # pass; a changed assertion does not. False positives cost a human glance; a false
-          # negative would launder provider-served garbage into a green squash commit.
+          # Recorded truth is not only inline asserts. Two classes route to a human:
+          #   (a) ANY change to a non-.py file under tests/ (a recorded fixture/response/blob:
+          #       .json/.csv/.nc/parquet/pickle/…). "Refresh the recording to what the provider
+          #       now serves" is exactly the garbage-canonization case and it carries no keyword,
+          #       so the whole file class is gated on sight.
+          #   (b) In tests/*.py: a changed assertion, a semantic token (units/CRS/EPSG/quality
+          #       flag), an expected/EXPECTED constant, OR any changed line bearing a bare numeric
+          #       literal — catches `EXPECTED_DEM_MEAN = 132.4 → 187.2`, which has no assert/==.
+          # Pure connector-code fixes and keyword-free, number-free test setup/import edits pass.
+          # A false positive costs a human glance; a false negative launders provider-served
+          # garbage into a green squash commit — so we deliberately err toward human review.
           diff=$(gh pr diff -R "$REPO" "$number")
           tripwire=$(printf '%s\n' "$diff" | awk '
-            /^\+\+\+ b\// { p=substr($0,7); intest=(p ~ /^tests\/.*\.py$/); next }
-            /^--- / { next }
-            /^@@/   { next }
-            (intest && /^[+-]/ && !/^(\+\+\+|---)/) {
-              if ($0 ~ /assert|approx|==|!=|\bunits\b|EPSG|epsg|\bcrs\b|GOOD|SUSPECT|PARTIAL|MISSING|DEGRADED|ESTIMATED/) print
+            /^--- a\//         { old=substr($0,7); next }
+            /^--- \/dev\/null/ { old="/dev/null"; next }
+            /^\+\+\+ b\// {
+              cur=substr($0,7); inpy=(cur ~ /^tests\/.*\.py$/)
+              if (cur ~ /^tests\// && cur !~ /\.py$/) print "recorded fixture changed: " cur
+              next
+            }
+            /^\+\+\+ \/dev\/null/ {
+              inpy=0
+              if (old ~ /^tests\// && old !~ /\.py$/) print "recorded fixture removed: " old
+              next
+            }
+            /^@@/ { next }
+            (inpy && /^[+-]/ && !/^(\+\+\+|---)/) {
+              code=substr($0,2)
+              if (code ~ /assert|approx|==|!=|<=|>=|expected|EXPECTED|\bunits\b|EPSG|epsg|\bcrs\b|GOOD|SUSPECT|PARTIAL|MISSING|DEGRADED|ESTIMATED/) { print; next }
+              if (code ~ /(^|[^A-Za-z0-9_.])-?[0-9]/) print
             }
           ')
           if [ -n "$tripwire" ]; then
@@ -119,33 +137,55 @@ jobs:
             exit 0
           fi
 
-          # ---- Gate 4: circuit breaker — repeated drift on the same connector ----
+          # ---- Gate 4: circuit breaker — a human-controlled LATCH, not a timer ----
+          # The tracking issue IS the breaker state. While an issue for this connector is OPEN,
+          # auto-merge is paused, full stop — a human's judgement is the switch. Closing the
+          # issue genuinely re-arms: the trip count only considers autofix merges NEWER than the
+          # last close, so the merges that tripped it do not immediately re-trip. First trip:
+          # >= CB_THRESHOLD autofix merges for this connector within CB_WINDOW_DAYS AND since the
+          # last re-arm. (Count is over all claude-autofix merges — erring toward pausing, the
+          # safe side for a breaker, rather than fail-open filtering by merge actor.)
           conns=$(echo "$files" | grep -E "^src/${SVC}/connectors/.*\.py$" || true)
           if [ -n "$conns" ]; then
-            cutoff=$(date -u -d "${CB_WINDOW_DAYS} days ago" +%s)
+            window_cut=$(date -u -d "${CB_WINDOW_DAYS} days ago" +%s)
             merged=$(gh pr list -R "$REPO" --state merged --label claude-autofix --limit 100 \
-                       --json number,mergedAt,files 2>/dev/null || echo '[]')
+                       --json mergedAt,files 2>/dev/null || echo '[]')
             for conn in $conns; do
-              count=$(printf '%s' "$merged" | jq --arg conn "$conn" --argjson cutoff "$cutoff" '
+              title="🚨 Repeated drift autofixes: $conn"
+
+              # Latched? An OPEN tracking issue means paused until a human closes it.
+              open_no=$(gh issue list -R "$REPO" --state open --search "in:title $conn" \
+                          --json number,title \
+                          --jq "[.[] | select(.title==\"$title\")][0].number" 2>/dev/null || true)
+              if [ -n "$open_no" ] && [ "$open_no" != "null" ]; then
+                printf '%s\n' "🤖 Auto-merge blocked (**circuit breaker latched**): tracking issue #$open_no for \`$conn\` is open. Auto-merge stays paused until a human closes it — closing the issue is the re-arm. Relabeled \`needs-human-review\`." > /tmp/body.md
+                relabel_human /tmp/body.md
+                exit 0
+              fi
+
+              # Re-arm baseline: newest close of a prior tracking issue for this connector.
+              # Only merges at/after this instant (and within the window) count toward a new trip.
+              closed_at=$(gh issue list -R "$REPO" --state closed --search "in:title $conn" \
+                            --json title,closedAt \
+                            --jq "[.[] | select(.title==\"$title\")] | sort_by(.closedAt) | reverse | .[0].closedAt // empty" 2>/dev/null || true)
+              baseline=$window_cut
+              if [ -n "$closed_at" ]; then
+                ca=$(date -u -d "$closed_at" +%s 2>/dev/null || echo 0)
+                [ "$ca" -gt "$baseline" ] && baseline=$ca
+              fi
+
+              count=$(printf '%s' "$merged" | jq --arg conn "$conn" --argjson base "$baseline" '
                 [ .[]
-                  | select(.mergedAt != null and (.mergedAt|fromdateiso8601) >= $cutoff)
+                  | select(.mergedAt != null and (.mergedAt|fromdateiso8601) >= $base)
                   | select([.files[]?.path] | index($conn)) ] | length')
-              echo "Connector $conn: $count prior autofix merge(s) in last ${CB_WINDOW_DAYS}d (threshold ${CB_THRESHOLD})."
+              echo "Connector $conn: $count autofix merge(s) since re-arm baseline (threshold ${CB_THRESHOLD})."
+
               if [ "$count" -ge "${CB_THRESHOLD}" ]; then
-                title="🚨 Repeated drift autofixes: $conn"
-                existing=$(gh issue list -R "$REPO" --state open --search "in:title $conn" \
-                             --json number,title --jq \
-                             "[.[] | select(.title==\"$title\")][0].number" 2>/dev/null || true)
-                if [ -z "$existing" ] || [ "$existing" = "null" ]; then
-                  printf '%s\n\n%s\n' \
-                    "The circuit breaker tripped: \`$conn\` has been auto-fixed **${count}** time(s) in the last ${CB_WINDOW_DAYS} days (threshold ${CB_THRESHOLD}). Auto-merge is now **paused** for this connector." \
-                    "Repeated automated drift on one connector usually means the provider relationship itself needs attention (an endpoint being deprecated in stages, a coverage/layer id churning, an auth or format change in flight) rather than another mechanical fixture refresh. A person should look at the recent autofix PRs for this connector before it is trusted to auto-merge again. Close this issue to re-arm auto-merge." > /tmp/issue.md
-                  gh issue create -R "$REPO" --title "$title" --label needs-human-review --body-file /tmp/issue.md || true
-                else
-                  gh issue comment -R "$REPO" "$existing" --body \
-                    "Circuit breaker tripped again on PR #$number (now ${count} merges in ${CB_WINDOW_DAYS}d). Still paused." || true
-                fi
-                printf '%s\n' "🤖 Auto-merge blocked (**circuit breaker**): \`$conn\` has been auto-fixed ${count}× in the last ${CB_WINDOW_DAYS} days (threshold ${CB_THRESHOLD}). Repeated drift is a signal the provider relationship needs a human, not another squash-merge. Tracking issue opened; relabeled \`needs-human-review\`." > /tmp/body.md
+                printf '%s\n\n%s\n' \
+                  "The circuit breaker tripped: \`$conn\` has been auto-fixed **${count}** time(s) since the last re-arm (window ${CB_WINDOW_DAYS}d, threshold ${CB_THRESHOLD}). Auto-merge is now **paused** for this connector." \
+                  "Repeated automated drift on one connector usually means the provider relationship itself needs attention (a staged endpoint deprecation, a churning coverage/layer id, an auth or format change in flight) rather than another mechanical fixture refresh. Review the recent autofix PRs for this connector. **Closing this issue re-arms auto-merge** for \`$conn\` — only merges after the close count toward the next trip." > /tmp/issue.md
+                gh issue create -R "$REPO" --title "$title" --label needs-human-review --body-file /tmp/issue.md || true
+                printf '%s\n' "🤖 Auto-merge blocked (**circuit breaker**): \`$conn\` auto-fixed ${count}× since last re-arm. Opened a tracking issue; auto-merge is paused until a human closes it. Relabeled \`needs-human-review\`." > /tmp/body.md
                 relabel_human /tmp/body.md
                 exit 0
               fi
