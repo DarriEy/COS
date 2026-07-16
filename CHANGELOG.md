@@ -6,6 +6,18 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Added
+- Provider-neutral spatial catalogs for CSV, JSON/GeoJSON, Parquet, and optional
+  GeoPackage/Shapefile inputs, including dateline-safe bbox filtering.
+- Anonymous AmeriFlux tower discovery from the official site inventory.
+- PLD/SWORD catalog-backed SWOT lake, reach, and node discovery with explicit
+  collection-version provenance and per-lake reference areas.
+- Bbox discovery over station metadata in user-downloaded ISMN archives.
+
+### Changed
+- Undocumented ISMN Data Viewer acquisition is now an explicit opt-in; archive
+  discovery no longer implies that the interactive portal is a supported API.
+
 ## [0.2.0] — 2026-07-16
 
 ### Added

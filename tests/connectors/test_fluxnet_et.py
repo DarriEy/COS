@@ -7,6 +7,7 @@ masking, and half-open UTC window trim that mirror the native SYMFLUENCE handler
 
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 
 from cos.connectors.fluxnet_et import LE_TO_ET_FACTOR, FluxnetETConnector
@@ -25,6 +26,30 @@ TIMESTAMP,LE_F_MDS,LE_F_MDS_QC,H_F_MDS
 20200105,-50.0,0,30.0
 20210601,100.0,0,50.0
 """
+
+
+@pytest.mark.asyncio
+async def test_bbox_discovery_uses_anonymous_ameriflux_inventory():
+    payload = [
+        {"SITE_ID": "CA-Bow", "SITE_NAME": "Bow", "GRP_LOCATION": {
+            "LOCATION_LAT": "51.1", "LOCATION_LONG": "-115.2"}, "DATA_POLICY": "CCBY4.0"},
+        {"SITE_ID": "US-Far", "SITE_NAME": "Far", "GRP_LOCATION": {
+            "LOCATION_LAT": "40", "LOCATION_LONG": "-100"}},
+    ]
+    connector = FluxnetETConnector()
+    connector._client = httpx.AsyncClient(
+        base_url=connector.base_url,
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload)),
+    )
+    try:
+        sites = await connector.list_sites(ReductionSpec(
+            domain_name="bow", bbox=(50, -116, 52, -114), centroid=(51, -115),
+        ))
+    finally:
+        await connector._client.aclose()
+    assert [site.site_id for site in sites] == ["fluxnet:CA-Bow"]
+    assert sites[0].latitude == 51.1
+    assert sites[0].extra["data_policy"] == "CCBY4.0"
 
 
 def test_parse_le_to_et_mm_per_day_and_window():

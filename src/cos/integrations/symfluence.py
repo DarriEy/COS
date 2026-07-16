@@ -7,12 +7,11 @@ This module exposes COS through SYMFLUENCE's ``ObservationBackend`` protocol
 soil moisture, snow cover, etc. Streamflow stays in CSFS; COS declares disjoint
 ``kinds`` and never serves streamflow.
 
-Current SYMFLUENCE routes six non-streamflow evaluator families through this
-backend under ``DATA_ACCESS: community``: GRACE, SNOTEL, MODIS snow, MODIS ET,
-FLUXNET ET, and USGS groundwater. It adapts OBS_CSV_V1 into each evaluator's
-canonical input and skips the native acquisition task. Selection/acquisition
-failure falls back to native. The routing table is intentionally explicit;
-other COS providers are conformant and available but are not yet manager-routed.
+SYMFLUENCE can use this backend as a fallback when native acquisition is
+unavailable or fails. COS adapts OBS_CSV_V1 into each evaluator's canonical
+input; selection order remains the responsibility of SYMFLUENCE. The routing
+table there is intentionally explicit; other COS providers are conformant and
+available but are not yet manager-routed.
 
 Design of the adapter mirrors CSFS:
 

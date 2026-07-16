@@ -62,6 +62,7 @@ pip install -e ".[gridded]"      # NetCDF connectors (GRACE etc.)
 cos providers          # registered connectors, kind, structural class, auth
 cos kinds              # canonical kinds + SI units
 cos fetch snotel -s snotel:679 --start 2022-01-01 --end 2022-03-01
+cos sites fluxnet_et --bbox 40,-89,42,-87 --limit 10
 ```
 
 ```python
@@ -76,11 +77,10 @@ series = cos.fetch_series_sync("snotel", spec, datetime(2022,1,1,tzinfo=UTC), da
 ## SYMFLUENCE integration
 
 COS registers a `CommunityObservationBackend` declaring all implemented
-non-streamflow kinds. Current SYMFLUENCE routes GRACE, SNOTEL, MODIS snow,
-MODIS ET, FLUXNET ET, USGS groundwater, staged SMAP, and staged CHIRPS through that backend when
-`DATA_ACCESS: community`; the delivery is adapted to the evaluator's canonical
-input path and the native download is skipped. Unsupported, gated, or failed
-community acquisitions fall back to the native handler. SMAP and CHIRPS require
+non-streamflow kinds. It is available to SYMFLUENCE as a fallback when native
+acquisition is unavailable or fails; provider selection order remains owned by
+SYMFLUENCE. When selected, COS adapts the delivery to the evaluator's canonical
+input path. SMAP and CHIRPS require
 a staged NetCDF because those COS connectors do not yet acquire their source
 products. Streamflow remains CSFS.
 

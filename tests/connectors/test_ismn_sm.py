@@ -6,6 +6,7 @@ moisture: m³/m³ identity unit, the native percent→fraction rule, blank→MIS
 and the half-open UTC window trim. Mirrors test_snotel.py / test_smap_sm.py.
 """
 
+import zipfile
 from datetime import UTC, datetime
 
 import httpx
@@ -26,6 +27,36 @@ DateTime,soil_moisture
 2020-01-03,
 2021-06-01,0.10
 """
+
+
+@pytest.mark.asyncio
+async def test_bbox_discovery_indexes_downloaded_ismn_archive(tmp_path):
+    archive_path = tmp_path / "ismn.zip"
+    header = "MAQU CST05 33.50 102.10 3500 0.05 0.05 soil_moisture\n"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("MAQU/CST05/sensor.stm", header + "2015/01/01 00:00 0.25 G\n")
+        archive.writestr(
+            "OTHER/FAR/sensor.stm",
+            "OTHER FAR 10 20 100 0.05 0.05 soil_moisture\n2015/01/01 00:00 0.2 G\n",
+        )
+    connector = ISMNSoilMoistureConnector(config={"archive_path": str(archive_path)})
+    sites = await connector.list_sites(
+        ReductionSpec(domain_name="maqu", bbox=(33, 101, 34, 103))
+    )
+    assert [site.site_id for site in sites] == ["ismn:MAQU:CST05"]
+    assert sites[0].latitude == 33.5
+    assert sites[0].extra["depth_from_m"] == "0.05"
+
+
+@pytest.mark.asyncio
+async def test_undocumented_ismn_dataviewer_is_opt_in():
+    connector = ISMNSoilMoistureConnector()
+    with pytest.raises(ConnectorError, match="not a documented API"):
+        await connector._fetch_station_csv(
+            "MAQU:CST05",
+            datetime(2015, 1, 1, tzinfo=UTC),
+            datetime(2015, 2, 1, tzinfo=UTC),
+        )
 
 # Percent-saturation variant (values > 1.5): the native rule divides by 100.
 MOCK_CSV_PERCENT = """\
@@ -113,7 +144,7 @@ async def test_fetch_series_builds_station_series():
     respx.get(url__regex=r"https://ismn\.earth/.*").mock(
         return_value=httpx.Response(200, text=MOCK_CSV_VOLUMETRIC)
     )
-    conn = ISMNSoilMoistureConnector()
+    conn = ISMNSoilMoistureConnector(config={"allow_unsupported_dataviewer": True})
     spec = ReductionSpec(domain_name="maqu", station_ids=("ismn:MAQU:CST05",))
     async with conn:
         series_list = await conn.fetch_series(
@@ -301,7 +332,7 @@ async def test_live_smoke_ismn():
 
     Run with: pytest -m network tests/connectors/test_ismn_sm.py -k live
     """
-    conn = ISMNSoilMoistureConnector()
+    conn = ISMNSoilMoistureConnector(config={"allow_unsupported_dataviewer": True})
     spec = ReductionSpec(domain_name="maqu", station_ids=("MAQU:CST05",))
     async with conn:
         series_list = await conn.fetch_series(

@@ -59,6 +59,11 @@ from pathlib import Path
 import structlog
 
 from cos.connectors.base import BaseObservationConnector
+from cos.connectors.swot_catalog import (
+    catalog_reference_area,
+    discover_swot_sites,
+    resolve_swot_feature_ids,
+)
 from cos.core.exceptions import ConnectorError, DataFormatError, ReductionError
 from cos.core.models import (
     KIND_UNITS,
@@ -117,8 +122,7 @@ class SWOTLakeAreaConnector(BaseObservationConnector):
         with a single ``feature_id`` / ``station`` config key honoured as a
         fallback.
         """
-        feature = self._feature(spec)
-        return [self._site(fid, spec, feature) for fid in self._feature_ids(spec)]
+        return discover_swot_sites(self, spec)
 
     async def fetch_series(
         self,
@@ -133,9 +137,9 @@ class SWOTLakeAreaConnector(BaseObservationConnector):
 
         # Point path: per-lake Hydrocron REST fetch + pure CSV parse.
         feature = self._feature(spec)
-        reference = self._reference_area_km2(spec)
         out: list[ObservationSeries] = []
-        for feature_id in self._feature_ids(spec):
+        for feature_id in resolve_swot_feature_ids(self, spec):
+            reference = self._reference_area_km2(spec, feature_id)
             text = await self._fetch_timeseries(feature, feature_id, start, end)
             points = self.parse_timeseries(text, start, end, reference_area_km2=reference)
             out.append(
@@ -170,6 +174,8 @@ class SWOTLakeAreaConnector(BaseObservationConnector):
             "output": "csv",
             "fields": self.FIELDS,
         }
+        if self.config.get("collection_name"):
+            params["collection_name"] = str(self.config["collection_name"])
         resp = await self._get("/hydrocron/v1/timeseries", params=params)
         return resp.text
 
@@ -355,10 +361,12 @@ class SWOTLakeAreaConnector(BaseObservationConnector):
         feature = spec.options.get("feature") or self.config.get("feature") or self.DEFAULT_FEATURE
         return str(feature)
 
-    def _reference_area_km2(self, spec: ReductionSpec) -> float:
+    def _reference_area_km2(self, spec: ReductionSpec, feature_id: str | None = None) -> float:
         raw = spec.options.get("reference_area_km2")
         if raw is None:
             raw = self.config.get("reference_area_km2")
+        if raw is None and feature_id is not None:
+            raw = catalog_reference_area(self, spec, feature_id)
         if raw is None:
             return DEFAULT_REFERENCE_AREA_KM2
         try:
