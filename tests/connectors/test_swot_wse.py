@@ -223,6 +223,7 @@ def test_reduce_file_window_trim_half_open(swot_grid_nc):
 
 
 @pytest.mark.network
+@pytest.mark.anonymous_live
 @pytest.mark.asyncio
 async def test_live_smoke_swot():
     """LIVE smoke against the real anonymous Hydrocron endpoint.

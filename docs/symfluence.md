@@ -6,12 +6,23 @@ its non-streamflow `kinds`. `acquire()` runs the canonical fetch+reduce and writ
 the OBS_CSV_V1 protocol delivery + sidecar manifest, window-trimmed to half-open
 UTC `[start, end)`.
 
-!!! danger "COS is NOT wired into the manager flow"
-    SYMFLUENCE's manager routes **only streamflow** through the
-    `ObservationBackend` tier today. The other kinds go through separate per-kind
-    evaluation paths (`evaluation.{grace,snotel,...}.download` →
-    `R.observation_handlers` → the evaluators). Registering COS makes it
-    *available and conformant* but does **not** put it in the evaluation pipeline
-    for SWE/TWS/ET. Generalizing the streamflow-only routing to all obs kinds is a
-    required SYMFLUENCE-side follow-up, out of scope for COS. See
-    `papers/cos_design.md` §4.
+With `DATA_ACCESS: community`, current SYMFLUENCE selects COS through the same
+`ObservationBackend` contract used by CSFS. It acquires and reduces the data,
+writes the evaluator's canonical observation file, and removes the corresponding
+native acquisition task. Selection or acquisition failure falls back to native.
+
+| configuration key | COS provider | kind |
+|---|---|---|
+| `GRACE` | `grace` | TWS |
+| `SNOTEL` | `snotel` | SWE |
+| `MODIS_SNOW` | `modis_sca` | snow cover |
+| `MODIS_ET` | `mod16_et` | ET |
+| `FLUXNET_ET` | `fluxnet_et` | ET |
+| `USGS_GW` | `usgs_gw` | groundwater |
+| `SMAP` | `smap_sm` | soil moisture (staged NetCDF) |
+| `CHIRPS` | `chirps_precip` | precipitation (staged NetCDF) |
+
+The SYMFLUENCE suite verifies selection, fallback, output adaptation, all eight
+routing entries, and a real SNOTEL acquisition. Expansion to the remaining COS
+providers is now an adapter-table/evaluator compatibility task rather than an
+architectural wiring gap.

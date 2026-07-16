@@ -28,22 +28,19 @@ networks / flux towers that must be *selected* by domain — collapse into a sin
 with every unit conversion pushed to the connector boundary. SYMFLUENCE pulls it
 through the versioned `ObservationBackend` protocol.
 
-## Honest coverage (this is a scaffold)
+## Honest coverage
 
-COS implements **3 of ~32** enumerated non-streamflow connectors — coverage
-≈ **9%**. The architecture, the canonical contract, and the SYMFLUENCE
-integration are complete; the bulk of the connector surface is unbuilt. The
-three proof connectors span the structural split:
+COS implements **50 connectors across 20 observation kinds**. Every connector
+has hermetic contract/spec tests and a recorded parity grade. **44/50 have been
+validated on real provider data**; six remain endpoint-, credential-, or
+download-size-gated. A grade is not the same thing as live native parity: COS
+labels native parity, live spec validation, and parity-by-construction
+separately.
 
-| connector | kind | structural class | auth | tested |
-|---|---|---|---|---|
-| `grace` | tws | gridded (basin reduction) | Earthdata | hermetic (synthetic NetCDF) |
-| `snotel` | swe | point network | none | hermetic + **live-smoked** |
-| `openet` | et | flux/ensemble | OpenET key | hermetic (synthetic JSON) |
-
-See [`papers/cos_design.md`](../papers/cos_design.md) for the full design, the
-roster, and `inventory/providers.yaml` for the honestly status-labeled roster of
-all 32 connectors.
+Run `cos validation` for the human-readable matrix or
+`cos validation --json-output` for the machine-readable report. The canonical
+roster is `inventory/providers.yaml`; validation evidence is kept with the
+SYMFLUENCE capability declarations and linked to connector tests.
 
 ## What COS is NOT
 
@@ -76,14 +73,20 @@ spec = ReductionSpec(domain_name="paradise", station_ids=("snotel:679",), option
 series = cos.fetch_series_sync("snotel", spec, datetime(2022,1,1,tzinfo=UTC), datetime(2022,3,1,tzinfo=UTC))
 ```
 
-## SYMFLUENCE integration — and an honest wiring gap
+## SYMFLUENCE integration
 
-COS registers a `CommunityObservationBackend` (contract 0.3.0) declaring its
-implemented non-streamflow kinds. **Registering it does NOT yet route the
-SYMFLUENCE manager flow through COS** for those kinds — the manager routes only
-streamflow through the observation-backend tier today; the other kinds go through
-separate per-kind evaluation paths. Wiring COS into the pipeline is a required
-SYMFLUENCE-side follow-up, out of scope for this repo. See `cos_design.md` §4.
+COS registers a `CommunityObservationBackend` declaring all implemented
+non-streamflow kinds. Current SYMFLUENCE routes GRACE, SNOTEL, MODIS snow,
+MODIS ET, FLUXNET ET, USGS groundwater, staged SMAP, and staged CHIRPS through that backend when
+`DATA_ACCESS: community`; the delivery is adapted to the evaluator's canonical
+input path and the native download is skipped. Unsupported, gated, or failed
+community acquisitions fall back to the native handler. SMAP and CHIRPS require
+a staged NetCDF because those COS connectors do not yet acquire their source
+products. Streamflow remains CSFS.
+
+The cross-repository suite includes hermetic routing tests plus a credential-free
+live SNOTEL acceptance test. See `docs/symfluence.md` for configuration and the
+current routing table.
 
 ## Automated CI triage
 

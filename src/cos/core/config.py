@@ -29,11 +29,16 @@ _DEFAULT_PATHS = (
 )
 
 #: auth-provider id -> (env var for the secret, netrc machine host).
-_AUTH_SOURCES: dict[str, tuple[str, str]] = {
-    "earthdata": ("EARTHDATA_TOKEN", "urs.earthdata.nasa.gov"),
-    "cds": ("CDSAPI_KEY", "cds.climate.copernicus.eu"),
-    "openet": ("OPENET_API_KEY", "openet-api.org"),
-    "ameriflux": ("AMERIFLUX_API_KEY", "ameriflux.lbl.gov"),
+_AUTH_SOURCES: dict[str, tuple[dict[str, str], str]] = {
+    "earthdata": ({"token": "EARTHDATA_TOKEN"}, "urs.earthdata.nasa.gov"),
+    "cds": ({"token": "CDSAPI_KEY"}, "cds.climate.copernicus.eu"),
+    "openet": ({"token": "OPENET_API_KEY"}, "openet-api.org"),
+    "ameriflux": ({"user_id": "AMERIFLUX_USER_ID", "email": "AMERIFLUX_USER_EMAIL"}, "ameriflux.lbl.gov"),
+    "gleam": ({"username": "GLEAM_USERNAME", "password": "GLEAM_PASSWORD"}, "gleam.eu"),
+    "ismn": ({"username": "ISMN_USERNAME", "password": "ISMN_PASSWORD"}, "ismn.earth"),
+    "gloh2o": ({"username": "GLOH2O_USERNAME", "password": "GLOH2O_PASSWORD"}, "gloh2o.org"),
+    "cdse": ({"client_id": "CDSE_CLIENT_ID", "client_secret": "CDSE_CLIENT_SECRET"},
+             "identity.dataspace.copernicus.eu"),
 }
 
 
@@ -82,15 +87,30 @@ def resolve_credentials(
         if auth_id in supplied and supplied[auth_id]:
             out[auth_id] = dict(supplied[auth_id])
             continue
-        env_var, host = _AUTH_SOURCES.get(auth_id, ("", ""))
-        token = os.environ.get(env_var) if env_var else None
-        if token:
-            out[auth_id] = {"token": token}
+        env_fields, host = _AUTH_SOURCES.get(auth_id, ({}, ""))
+        env_creds = {field: os.environ[var] for field, var in env_fields.items() if os.environ.get(var)}
+        if env_fields and len(env_creds) == len(env_fields):
+            out[auth_id] = env_creds
             continue
         netrc_creds = _from_netrc(host)
         if netrc_creds:
             out[auth_id] = netrc_creds
     return out
+
+
+def credential_report(auth_ids: set[str] | None = None) -> list[dict[str, object]]:
+    """Return secret-free credential readiness for declared auth providers."""
+    ids = sorted(auth_ids if auth_ids is not None else _AUTH_SOURCES)
+    resolved = resolve_credentials(frozenset(ids))
+    return [
+        {
+            "auth_id": auth_id,
+            "resolved": auth_id in resolved,
+            "environment": list(_AUTH_SOURCES.get(auth_id, ({}, ""))[0].values()),
+            "netrc_host": _AUTH_SOURCES.get(auth_id, ({}, ""))[1] or None,
+        }
+        for auth_id in ids
+    ]
 
 
 def _from_netrc(host: str) -> dict[str, str] | None:

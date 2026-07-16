@@ -4,6 +4,9 @@
 pip install -e ".[dev]"
 cos providers          # registered connectors, kind, structural class, auth
 cos kinds              # canonical kinds + SI units
+cos validation         # validation tiers and evidence coverage
+cos doctor             # local credentials/cache readiness
+cos sites snotel --bbox 46,-122,47,-121
 cos fetch snotel -s snotel:679 --start 2022-01-01 --end 2022-03-01
 ```
 

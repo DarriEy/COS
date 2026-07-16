@@ -78,6 +78,62 @@ async def test_list_sites_from_explicit_ids():
     assert {s.site_id for s in sites} == {"snotel:679", "snotel:680"}
 
 
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_sites_discovers_bbox_and_ranks_nearest():
+    metadata = [
+        {"stationTriplet": "679:WA:SNTL", "name": "Paradise", "latitude": 46.78, "longitude": -121.74,
+         "networkCode": "SNTL", "stateCode": "WA"},
+        {"stationTriplet": "999:WA:SNTL", "name": "Outside", "latitude": 48.0, "longitude": -121.0},
+        {"stationTriplet": "680:WA:SNTL", "name": "Near", "latitude": 46.80, "longitude": -121.70},
+    ]
+    respx.get("https://wcc.sc.egov.usda.gov/awdbRestApi/services/v1/stations").mock(
+        return_value=httpx.Response(200, json=metadata)
+    )
+    spec = ReductionSpec(bbox=(46.0, -122.0, 47.0, -121.0), centroid=(46.79, -121.71),
+                         options={"max_sites": 1})
+    async with SNOTELConnector() as conn:
+        sites = await conn.list_sites(spec)
+    assert [site.site_id for site in sites] == ["snotel:680:WA:SNTL"]
+    assert sites[0].extra["state"] == "WA"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_discovery_rejects_invalid_limit():
+    respx.get("https://wcc.sc.egov.usda.gov/awdbRestApi/services/v1/stations").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    async with SNOTELConnector() as conn:
+        with pytest.raises(DataFormatError, match="max_sites"):
+            await conn.list_sites(ReductionSpec(bbox=(46, -122, 47, -121), options={"max_sites": 0}))
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_discovered_fetch_preserves_station_metadata_and_caps_fanout():
+    metadata = [
+        {"stationTriplet": "679:WA:SNTL", "name": "Paradise", "latitude": 46.78, "longitude": -121.74},
+        {"stationTriplet": "680:WA:SNTL", "name": "Near", "latitude": 46.80, "longitude": -121.70},
+    ]
+    respx.get("https://wcc.sc.egov.usda.gov/awdbRestApi/services/v1/stations").mock(
+        return_value=httpx.Response(200, json=metadata)
+    )
+    respx.get(url__regex=r"https://wcc\.sc\.egov\.usda\.gov/reportGenerator/.*").mock(
+        return_value=httpx.Response(200, text=MOCK_REPORT)
+    )
+    spec = ReductionSpec(bbox=(46, -122, 47, -121), centroid=(46.79, -121.72),
+                         options={"max_fetch_sites": 1})
+    async with SNOTELConnector() as conn:
+        series = await conn.fetch_series(
+            spec, datetime(2020, 1, 1, tzinfo=UTC), datetime(2021, 1, 1, tzinfo=UTC)
+        )
+    assert len(series) == 1
+    assert series[0].site.name in {"Paradise", "Near"}
+    assert series[0].site.latitude in {46.78, 46.80}
+    assert series[0].site.latitude != spec.centroid[0]
+
+
 def test_full_triplet_is_preserved_not_mangled():
     # Regression: a full AWDB triplet must pass through unmangled. Splitting on
     # any ":" turned "679:WA:SNTL" into "WA:SNTL" -> a bogus triplet -> empty
@@ -98,6 +154,7 @@ def test_bare_and_namespaced_ids_resolve_to_triplets():
 
 
 @pytest.mark.network
+@pytest.mark.anonymous_live
 @pytest.mark.asyncio
 async def test_live_smoke_snotel():
     """LIVE smoke against the real anonymous NRCS AWDB endpoint.

@@ -1,10 +1,8 @@
 """SYMFLUENCE integration tests.
 
-The pure helpers are tested standalone (no SYMFLUENCE). The backend registration
-+ capability shape is tested with importorskip against the SYMFLUENCE venv (COS
-installed editable --no-deps into it). The manager-flow WIRING is deliberately
-NOT asserted here — it does not exist (see the integration module docstring and
-cos_design.md §4); these tests assert availability and conformance only.
+The pure helpers are tested standalone (no SYMFLUENCE). Backend registration,
+capability shape, and the framework's explicit non-streamflow routing table are
+tested with importorskip against the SYMFLUENCE environment.
 """
 
 from __future__ import annotations
@@ -170,6 +168,19 @@ def test_backend_interface_version_compatible():
     import cos.integrations.symfluence as integ
 
     assert contract.is_compatible(integ.TARGET_INTERFACE_VERSION)
+
+
+def test_symfluence_manager_routes_representative_cos_kinds():
+    pytest.importorskip("symfluence")
+    from symfluence.data.acquisition.acquisition_service import AcquisitionService
+
+    routes = AcquisitionService._COMMUNITY_NONSTREAMFLOW_OBS
+    assert routes["GRACE"][:2] == ("grace", "tws")
+    assert routes["SNOTEL"][:2] == ("snotel", "swe")
+    assert routes["MODIS_ET"][:2] == ("mod16_et", "et")
+    assert routes["USGS_GW"][:2] == ("usgs_gw", "groundwater")
+    assert routes["SMAP"][:2] == ("smap_sm", "soil_moisture")
+    assert routes["CHIRPS"][:2] == ("chirps_precip", "precipitation")
 
 
 def test_capabilities_propagate_license_posture_to_contract():

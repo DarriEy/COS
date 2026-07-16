@@ -7,23 +7,12 @@ This module exposes COS through SYMFLUENCE's ``ObservationBackend`` protocol
 soil moisture, snow cover, etc. Streamflow stays in CSFS; COS declares disjoint
 ``kinds`` and never serves streamflow.
 
-CRITICAL HONESTY NOTE — COS IS NOT WIRED INTO THE MANAGER FLOW
-==============================================================
-SYMFLUENCE's manager flow routes ONLY streamflow through the
-``ObservationBackend`` tier today (the Finding-1 fix the CSFS port relied on).
-The other observation kinds still go through SEPARATE evaluation paths:
-``evaluation.{grace,snotel,smap,...}.download`` flags → ``R.observation_handlers``
-→ the per-kind evaluators.
-
-So registering this backend makes COS *available* and *protocol-conformant*, and
-makes the drop-in handlers resolvable by registry key — but it does **NOT** make
-the manager flow use COS for, say, SWE or TWS. Making the manager actually use
-COS requires a SYMFLUENCE-side change (generalizing the streamflow-only routing
-to all obs kinds, i.e. routing the ``evaluation.<kind>`` paths through
-``R.observation_backends`` under ``DATA_ACCESS: community``). That is a required
-SYMFLUENCE follow-up and is OUT OF SCOPE here. Do not read COS registration as
-"COS is in the evaluation pipeline" — it is not. (See ``papers/cos_design.md``
-§4.)
+Current SYMFLUENCE routes six non-streamflow evaluator families through this
+backend under ``DATA_ACCESS: community``: GRACE, SNOTEL, MODIS snow, MODIS ET,
+FLUXNET ET, and USGS groundwater. It adapts OBS_CSV_V1 into each evaluator's
+canonical input and skips the native acquisition task. Selection/acquisition
+failure falls back to native. The routing table is intentionally explicit;
+other COS providers are conformant and available but are not yet manager-routed.
 
 Design of the adapter mirrors CSFS:
 
@@ -340,7 +329,7 @@ _CAP_NOTES: dict[str, str] = {
              "Validated == native grace.py reduction (r=1.0000).",
     "snotel": "NRCS SNOTEL SWE, anonymous AWDB report CSV, inches->mm. Validated == native "
               "snotel.py for Paradise #679 (r=1.0, 0 mm delta).",
-    "openet": "OpenET ensemble ET, keyed API, mm/period->mm/day. Ungated (needs an OpenET key).",
+    "openet": "OpenET ensemble ET, keyed API, mm/period->mm/day. Parity-by-construction; needs an OpenET key.",
 }
 
 
@@ -379,8 +368,8 @@ def _build_observation_capabilities() -> tuple[ObservationCapabilitySpec, ...]:
                 notes=_CAP_NOTES.get(
                     slug,
                     f"{kind.value} via COS connector '{slug}', ported from the SYMFLUENCE "
-                    "native handler (reduction + units mirror native). Ungated pending a "
-                    "native-parity run; serve with ALLOW_UNGATED_BACKENDS: true.",
+                    "native handler or product specification; see parity_grade for "
+                    "the exact evidence tier.",
                 ),
                 redistribution=redistribution,
                 data_license=data_license,
@@ -447,10 +436,8 @@ class CommunityObservationBackend:
     fetch+reduce, and writes the OBS_CSV_V1 protocol delivery + sidecar manifest,
     window-trimmed to the half-open UTC ``[start, end)``.
 
-    NB: registering this backend does NOT route the SYMFLUENCE manager flow
-    through COS for non-streamflow kinds — see the module docstring. The backend
-    is conformant and available; the manager-flow wiring is a SYMFLUENCE
-    follow-up out of scope here.
+    Current SYMFLUENCE manager routing covers the explicit provider table noted
+    in the module docstring; other capabilities remain directly callable.
     """
 
     name = "community-observation"
@@ -602,9 +589,9 @@ def register() -> None:
 
     Zero-arg hook referenced by the ``symfluence.plugins`` entry point.
     Registers :class:`CommunityObservationBackend` under ``R.observation_backends``
-    (skipped on a framework without that registry). See the module docstring:
-    this makes COS available and conformant, NOT wired into the manager flow for
-    non-streamflow kinds.
+    (skipped on a framework without that registry). Current SYMFLUENCE manager
+    routing consumes the explicit six-family subset documented above; all other
+    capabilities remain available through the backend contract directly.
     """
     if not HAVE_SYMFLUENCE:
         raise ImportError(

@@ -293,6 +293,7 @@ def test_fields_request_real_hydrocron_storage_field():
 
 
 @pytest.mark.network
+@pytest.mark.anonymous_live
 @pytest.mark.asyncio
 async def test_live_smoke_swot_lake_storage():
     """LIVE smoke against the real anonymous Hydrocron endpoint.

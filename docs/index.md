@@ -8,11 +8,11 @@ canonical per-site time-series contract for model **evaluation and calibration**
 COS is the non-streamflow sibling of [CSFS](https://github.com/DarriEy/CSFS)
 (streamflow), in the SYMFLUENCE community-services family (CSFS · CFS · CAS · COS).
 
-!!! warning "This is a scaffold"
-    COS implements **3 of ~32** enumerated connectors (≈9% coverage). The
-    architecture, canonical contract, and SYMFLUENCE integration are complete;
-    the bulk of the connector surface is unbuilt. See the
-    [Connector Roster](roster.md).
+!!! info "Coverage and validation"
+    COS implements **50 connectors across 20 kinds**. All have recorded parity
+    evidence; 44 have been exercised on real provider data. Validation tiers
+    distinguish live native parity, live product-spec checks, and hermetic
+    parity-by-construction. See the [Connector Roster](roster.md).
 
 ## What COS is NOT
 
