@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from typing import Literal
 
 from cos.core.config import load_config, resolve_credentials
 from cos.core.models import (
@@ -34,6 +35,7 @@ from cos.core.models import (
     ObservationSeries,
     QualityFlag,
     ReductionSpec,
+    SiteDiscovery,
     SiteRef,
     SpatialReduction,
 )
@@ -50,9 +52,11 @@ __all__ = [
     "QualityFlag",
     "ReductionSpec",
     "SiteRef",
+    "SiteDiscovery",
     "SpatialReduction",
     "__version__",
     "discover",
+    "discover_sites",
     "fetch_series",
     "fetch_series_sync",
     "get_connector",
@@ -60,6 +64,39 @@ __all__ = [
     "load_config",
     "resolve_credentials",
 ]
+
+
+async def discover_sites(
+    provider_slug: str,
+    spec: ReductionSpec,
+    config: dict | None = None,
+) -> SiteDiscovery:
+    """Resolve explicit/spatial selection through a connector with provenance."""
+    from datetime import UTC
+
+    discover()
+    connector_cls = get_connector(provider_slug)
+    connector_config = dict(config or {})
+    auth: frozenset[str] = getattr(connector_cls, "auth", frozenset())
+    resolved = resolve_credentials(auth)
+    if resolved:
+        connector_config.setdefault("credentials", resolved)
+    async with connector_cls(config=connector_config) as connector:
+        sites = await connector.list_sites(spec)
+    query: Literal["explicit", "bbox", "centroid", "domain"] = (
+        "explicit" if spec.station_ids else "bbox" if spec.bbox else "centroid" if spec.centroid else "domain"
+    )
+    raw_limit = spec.options.get("max_sites")
+    limit = int(raw_limit) if raw_limit is not None else None
+    return SiteDiscovery(
+        provider=provider_slug,
+        query=query,
+        sites=sites,
+        requested_limit=limit,
+        limit_reached=bool(limit is not None and len(sites) >= limit),
+        discovered_at=datetime.now(UTC),
+        source_info={"connector": f"{connector_cls.__module__}.{connector_cls.__name__}"},
+    )
 
 
 async def fetch_series(

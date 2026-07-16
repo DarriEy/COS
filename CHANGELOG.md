@@ -6,7 +6,7 @@ semantic versioning.
 
 ## [Unreleased]
 
-## [0.2.0] — 2026-07-15
+## [0.2.0] — 2026-07-16
 
 ### Added
 - Complete roster of 50 connectors across 20 canonical observation kinds.
@@ -14,11 +14,16 @@ semantic versioning.
   real provider data and the remainder explicitly labeled by gating reason.
 - `cos validation` / `--json-output` validation reporting and `cos sites`
   station/feature discovery.
+- Public `discover_sites()` results with query provenance and bounded-result
+  metadata, plus secret-free credential readiness reporting.
 - JSON canonical-series output from `cos fetch`.
 - Weekly live-health workflow with four bounded anonymous provider sentinels,
   plus validation-report and JUnit artifacts.
+- Weekly/release-branch credential readiness monitoring and an OpenET
+  credentialed sentinel (skipped, not passed, without its secret).
 - SYMFLUENCE community-backend capabilities, data-license posture gates, and
-  non-streamflow routing for six evaluator families.
+  non-streamflow routing for eight evaluator families, including staged SMAP
+  and CHIRPS products.
 
 ### Changed
 - Release and documentation now distinguish live native parity, live product-

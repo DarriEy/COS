@@ -95,3 +95,14 @@ def test_fetch_json_preserves_provenance(monkeypatch):
     payload = json.loads(result.output)
     assert payload[0]["source_info"]["station"] == "679:WA:SNTL"
     assert payload[0]["points"][0]["quality"] == "good"
+
+
+def test_doctor_json_is_secret_free(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENET_API_KEY", "never-print-this")
+    monkeypatch.setenv("COS_CACHE_DIR", str(tmp_path / "cache"))
+    result = CliRunner().invoke(cli, ["doctor", "--json-output"])
+    assert result.exit_code == 0
+    assert "never-print-this" not in result.output
+    payload = json.loads(result.output)
+    openet = next(row for row in payload["credentials"] if row["auth_id"] == "openet")
+    assert openet["resolved"] is True

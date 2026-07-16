@@ -101,7 +101,7 @@ def sites(ctx: click.Context, provider: str, station_id: tuple[str, ...], bbox: 
     configs = load_config(Path(ctx.obj["config_path"]) if ctx.obj.get("config_path") else None)
     cos.discover()
     try:
-        connector_cls = cos.get_connector(provider)
+        cos.get_connector(provider)
     except KeyError as exc:
         raise click.ClickException(str(exc)) from exc
     config = dict(configs.get(provider, {}))
@@ -116,8 +116,8 @@ def sites(ctx: click.Context, provider: str, station_id: tuple[str, ...], bbox: 
     )
 
     async def _run() -> None:
-        async with connector_cls(config=config) as connector:
-            found = await connector.list_sites(spec)
+        result = await cos.discover_sites(provider, spec, config=config)
+        found = result.sites
         for site in found:
             coords = ""
             if site.latitude is not None and site.longitude is not None:
@@ -129,9 +129,10 @@ def sites(ctx: click.Context, provider: str, station_id: tuple[str, ...], bbox: 
 
 
 @cli.command("doctor")
-def doctor() -> None:
+@click.option("--json-output", "as_json", is_flag=True, help="Emit secret-free readiness JSON")
+def doctor(as_json: bool) -> None:
     """Check connector registration, credentials, cache, and validation gates."""
-    from cos.core.config import resolve_credentials
+    from cos.core.config import credential_report, resolve_credentials
     from cos.core.fetch import cache_dir
     from cos.core.registry import discover, get_connector, list_providers
     from cos.core.validation import validation_report
@@ -144,6 +145,18 @@ def doctor() -> None:
         if absent:
             missing[slug] = absent
     ungraded = [row["provider"] for row in validation_report() if not row["grade"]]
+    readiness = credential_report({a for slug in list_providers()
+                                   for a in getattr(get_connector(slug), "auth", frozenset())})
+    payload = {
+        "connectors": len(list_providers()),
+        "validation_ok": not ungraded,
+        "ungraded": ungraded,
+        "cache": str(cache_dir()),
+        "credentials": readiness,
+    }
+    if as_json:
+        click.echo(json.dumps(payload, indent=2))
+        return
     click.echo(f"connectors: {len(list_providers())} registered")
     click.echo(f"validation: {'ok' if not ungraded else f'missing grades for {ungraded}'}")
     click.echo(f"cache: {cache_dir()}")

@@ -34,3 +34,30 @@ async def test_fetch_resolves_single_token_without_overriding_explicit_config(mo
     assert seen[0]["token"] == "from-env"
     assert seen[0]["credentials"]["openet"]["token"] == "from-env"
     assert seen[1]["token"] == "explicit"
+
+
+@pytest.mark.asyncio
+async def test_discover_sites_reports_query_and_connector_provenance(monkeypatch):
+    from cos.core.models import SiteRef
+
+    class FakeConnector:
+        auth = frozenset()
+
+        def __init__(self, config=None):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+        async def list_sites(self, spec):
+            return [SiteRef(kind="station", site_id="fake:1")]
+
+    monkeypatch.setattr(cos, "discover", lambda: None)
+    monkeypatch.setattr(cos, "get_connector", lambda slug: FakeConnector)
+    result = await cos.discover_sites("fake", ReductionSpec(bbox=(1, 2, 3, 4), options={"max_sites": 5}))
+    assert result.query == "bbox"
+    assert result.sites[0].site_id == "fake:1"
+    assert result.source_info["connector"].endswith("FakeConnector")

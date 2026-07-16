@@ -8,6 +8,7 @@ cos validation               # parity/live/spec validation matrix
 cos validation --json-output # machine-readable validation + license report
 cos sites <provider> ...      # discover stations/features/reduced regions
 cos doctor                    # registration, credential, cache, and gate checks
+cos doctor --json-output      # secret-free machine-readable readiness
 cos fetch <provider> ...      # fetch + print a canonical series
 ```
 

@@ -19,8 +19,10 @@ native acquisition task. Selection or acquisition failure falls back to native.
 | `MODIS_ET` | `mod16_et` | ET |
 | `FLUXNET_ET` | `fluxnet_et` | ET |
 | `USGS_GW` | `usgs_gw` | groundwater |
+| `SMAP` | `smap_sm` | soil moisture (staged NetCDF) |
+| `CHIRPS` | `chirps_precip` | precipitation (staged NetCDF) |
 
-The SYMFLUENCE suite verifies selection, fallback, output adaptation, all six
+The SYMFLUENCE suite verifies selection, fallback, output adaptation, all eight
 routing entries, and a real SNOTEL acquisition. Expansion to the remaining COS
 providers is now an adapter-table/evaluator compatibility task rather than an
 architectural wiring gap.

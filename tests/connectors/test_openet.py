@@ -214,6 +214,26 @@ def test_parity_half_open_window_trim_matches_native_closed_caveat():
     assert 3 in native_closed_months and 3 not in cos_months
 
 
+@pytest.mark.network
+@pytest.mark.credential_live
+@pytest.mark.asyncio
+async def test_live_openet_with_environment_key():
+    """Small real OpenET point request; OPENET_API_KEY is resolved by public API."""
+    import os
+
+    if not os.environ.get("OPENET_API_KEY"):
+        pytest.skip("OPENET_API_KEY is not configured")
+    import cos
+
+    series = await cos.fetch_series(
+        "openet", ReductionSpec(domain_name="ca_point", centroid=(38.5, -121.5)),
+        datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 2, 1, tzinfo=UTC),
+        config={"interval": "monthly"},
+    )
+    assert series and series[0].unit == "mm/day"
+    assert any(point.value is not None for point in series[0].points)
+
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_fetch_series_ensemble_default():

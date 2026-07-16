@@ -179,6 +179,8 @@ def test_symfluence_manager_routes_representative_cos_kinds():
     assert routes["SNOTEL"][:2] == ("snotel", "swe")
     assert routes["MODIS_ET"][:2] == ("mod16_et", "et")
     assert routes["USGS_GW"][:2] == ("usgs_gw", "groundwater")
+    assert routes["SMAP"][:2] == ("smap_sm", "soil_moisture")
+    assert routes["CHIRPS"][:2] == ("chirps_precip", "precipitation")
 
 
 def test_capabilities_propagate_license_posture_to_contract():

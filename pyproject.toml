@@ -112,6 +112,7 @@ markers = [
     "network: test reaches a real upstream API; deselected in CI via -m 'not network'",
     "live: test requires a real downloaded product or provider credentials",
     "anonymous_live: bounded credential-free provider sentinel used by scheduled health checks",
+    "credential_live: real provider check requiring repository/environment credentials",
 ]
 
 [tool.coverage.run]

@@ -77,10 +77,12 @@ series = cos.fetch_series_sync("snotel", spec, datetime(2022,1,1,tzinfo=UTC), da
 
 COS registers a `CommunityObservationBackend` declaring all implemented
 non-streamflow kinds. Current SYMFLUENCE routes GRACE, SNOTEL, MODIS snow,
-MODIS ET, FLUXNET ET, and USGS groundwater through that backend when
+MODIS ET, FLUXNET ET, USGS groundwater, staged SMAP, and staged CHIRPS through that backend when
 `DATA_ACCESS: community`; the delivery is adapted to the evaluator's canonical
 input path and the native download is skipped. Unsupported, gated, or failed
-community acquisitions fall back to the native handler. Streamflow remains CSFS.
+community acquisitions fall back to the native handler. SMAP and CHIRPS require
+a staged NetCDF because those COS connectors do not yet acquire their source
+products. Streamflow remains CSFS.
 
 The cross-repository suite includes hermetic routing tests plus a credential-free
 live SNOTEL acceptance test. See `docs/symfluence.md` for configuration and the

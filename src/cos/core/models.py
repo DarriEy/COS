@@ -188,6 +188,18 @@ class ReductionSpec(BaseModel):
     options: dict = Field(default_factory=dict)
 
 
+class SiteDiscovery(BaseModel):
+    """Auditable result of resolving a domain into provider sites/regions."""
+
+    provider: str
+    query: Literal["explicit", "bbox", "centroid", "domain"]
+    sites: list[SiteRef]
+    requested_limit: int | None = None
+    limit_reached: bool = False
+    discovered_at: datetime
+    source_info: dict[str, str] = Field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # Arrow schema for the optional reduced-series store / parquet cache.
 # Long/tidy: one row per (series, timestep). ``unit`` and ``kind`` are carried
