@@ -289,6 +289,7 @@ def test_reduce_file_window_trim_half_open(swot_area_nc):
 
 
 @pytest.mark.network
+@pytest.mark.anonymous_live
 @pytest.mark.asyncio
 async def test_live_smoke_swot_lake():
     """LIVE smoke against the real anonymous Hydrocron endpoint.
@@ -296,7 +297,9 @@ async def test_live_smoke_swot_lake():
     Run with: pytest -m network tests/connectors/test_swot_lake_area.py -k live
     """
     conn = SWOTLakeAreaConnector()
-    spec = ReductionSpec(domain_name="lakes", station_ids=("6350900223",))
+    # Hydrocron's documented PriorLake example; unlike the former fixture
+    # 6350900223, this id remains present in the current version-C catalog.
+    spec = ReductionSpec(domain_name="lakes", station_ids=("2710046612",))
     async with conn:
         series_list = await conn.fetch_series(
             spec, datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 12, 31, tzinfo=UTC)

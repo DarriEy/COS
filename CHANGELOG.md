@@ -6,9 +6,31 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-07-15
+
+### Added
+- Complete roster of 50 connectors across 20 canonical observation kinds.
+- Structured parity evidence for every connector; 44 connectors validated on
+  real provider data and the remainder explicitly labeled by gating reason.
+- `cos validation` / `--json-output` validation reporting and `cos sites`
+  station/feature discovery.
+- JSON canonical-series output from `cos fetch`.
+- Weekly live-health workflow with four bounded anonymous provider sentinels,
+  plus validation-report and JUnit artifacts.
+- SYMFLUENCE community-backend capabilities, data-license posture gates, and
+  non-streamflow routing for six evaluator families.
+
+### Changed
+- Release and documentation now distinguish live native parity, live product-
+  specification validation, and parity-by-construction.
+- Package version and connector user agent advanced to 0.2.
+
+### Fixed
+- Registered the `live` pytest marker used by product smoke tests.
+
 ## [0.1.0] — 2026-06-13
 
-Initial scaffold. **This is a scaffold, not a complete service:** 3 of ~32
+Initial scaffold. **This was a scaffold, not a complete service:** 3 of ~32
 enumerated non-streamflow connectors are implemented (≈9% coverage). The
 architecture, the canonical contract, and the SYMFLUENCE integration are
 complete; most of the connector surface is unbuilt.

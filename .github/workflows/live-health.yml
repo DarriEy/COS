@@ -1,0 +1,31 @@
+name: Live Connector Health
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - name: Export validation inventory
+        run: cos validation --json-output > validation-report.json
+      - name: Run bounded anonymous provider sentinels
+        run: pytest tests/connectors -m anonymous_live --no-cov --tb=short -q --junitxml=live-health.xml
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-connector-health
+          path: |
+            validation-report.json
+            live-health.xml

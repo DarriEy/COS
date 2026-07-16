@@ -39,7 +39,7 @@ from cos.core.models import (
 )
 from cos.core.registry import discover, get_connector, list_providers
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "KIND_UNITS",
@@ -72,7 +72,16 @@ async def fetch_series(
     """Fetch canonical observation series from one connector (no store needed)."""
     discover()
     connector_cls = get_connector(provider_slug)
-    async with connector_cls(config=config or {}) as connector:
+    connector_config = dict(config or {})
+    auth: frozenset[str] = getattr(connector_cls, "auth", frozenset())
+    resolved = resolve_credentials(auth)
+    if len(resolved) == 1:
+        secret = next(iter(resolved.values()))
+        if "token" in secret:
+            connector_config.setdefault("token", secret["token"])
+    if resolved:
+        connector_config.setdefault("credentials", resolved)
+    async with connector_cls(config=connector_config) as connector:
         return await connector.fetch_series(spec, start, end)
 
 

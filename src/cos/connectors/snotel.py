@@ -47,13 +47,30 @@ class SNOTELConnector(BaseObservationConnector):
     auth = frozenset()  # anonymous
 
     async def list_sites(self, spec: ReductionSpec) -> list[SiteRef]:
-        """Sites are the explicitly-requested SNOTEL stations.
-
-        AWDB station discovery by bbox is a separate (planned) call; today the
-        domain selects stations by explicit id (``spec.station_ids``), exactly
-        as the native handler reads ``SNOTEL_STATION`` from config.
-        """
-        return [self._site(sid, spec) for sid in self._station_ids(spec)]
+        """Return explicit stations or discover active SWE stations spatially."""
+        explicit = self._station_ids(spec)
+        if explicit:
+            return [self._site(sid, spec) for sid in explicit]
+        if not spec.bbox and not spec.centroid:
+            raise DataFormatError(self.slug, "station discovery needs a bbox, centroid, or explicit station_ids")
+        response = await self._get(
+            "/awdbRestApi/services/v1/stations",
+            params={
+                "stationTriplets": "*:*:SNTL",
+                "elements": "WTEQ",
+                "durations": "DAILY",
+                "activeOnly": "true",
+            },
+        )
+        try:
+            rows = response.json()
+        except ValueError as exc:
+            raise DataFormatError(self.slug, "AWDB station metadata was not valid JSON") from exc
+        sites = self._sites_from_metadata(rows, spec)
+        limit = int(spec.options.get("max_sites", self.config.get("max_sites", 25)))
+        if limit < 1:
+            raise DataFormatError(self.slug, "max_sites must be a positive integer")
+        return sites[:limit]
 
     async def fetch_series(
         self,
@@ -62,7 +79,16 @@ class SNOTELConnector(BaseObservationConnector):
         end: datetime,
     ) -> list[ObservationSeries]:
         out: list[ObservationSeries] = []
-        for station_id in self._station_ids(spec):
+        station_ids = self._station_ids(spec)
+        if station_ids:
+            selections = [(station_id, self._site(station_id, spec)) for station_id in station_ids]
+        else:
+            discovered = await self.list_sites(spec)
+            fetch_limit = int(spec.options.get("max_fetch_sites", self.config.get("max_fetch_sites", 5)))
+            if fetch_limit < 1:
+                raise DataFormatError(self.slug, "max_fetch_sites must be a positive integer")
+            selections = [(site.site_id.split(":", 1)[1], site) for site in discovered[:fetch_limit]]
+        for station_id, site in selections:
             triplet = self._triplet(station_id, spec)
             text = await self._fetch_report(triplet)
             points = self.parse_report(text, start, end)
@@ -70,7 +96,7 @@ class SNOTELConnector(BaseObservationConnector):
                 ObservationSeries(
                     provider=self.slug,
                     kind=self.kind,
-                    site=self._site(station_id, spec),
+                    site=site,
                     reduction=SpatialReduction.STATION,
                     unit=KIND_UNITS[self.kind],
                     points=points,
@@ -178,6 +204,41 @@ class SNOTELConnector(BaseObservationConnector):
             name=f"SNOTEL {station_id}",
             extra={"network": "SNTL"},
         )
+
+    @staticmethod
+    def _sites_from_metadata(rows: object, spec: ReductionSpec) -> list[SiteRef]:
+        """Filter AWDB StationDTO rows and rank them nearest the centroid."""
+        if not isinstance(rows, list):
+            raise DataFormatError("snotel", "AWDB station metadata must be a list")
+        sites: list[SiteRef] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                lat, lon = float(row["latitude"]), float(row["longitude"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if spec.bbox:
+                lat_min, lon_min, lat_max, lon_max = spec.bbox
+                if not (lat_min <= lat <= lat_max and lon_min <= lon <= lon_max):
+                    continue
+            triplet = str(row.get("stationTriplet") or row.get("stationId") or "").strip()
+            if not triplet:
+                continue
+            triplet_parts = triplet.split(":")
+            state = str(row.get("stateCode") or (triplet_parts[1] if len(triplet_parts) >= 3 else ""))
+            network = str(row.get("networkCode") or (triplet_parts[2] if len(triplet_parts) >= 3 else "SNTL"))
+            sites.append(SiteRef(
+                kind="station", site_id=f"snotel:{triplet}", latitude=lat, longitude=lon,
+                name=str(row.get("name") or f"SNOTEL {triplet}"),
+                extra={"network": network, "state": state},
+            ))
+        if spec.centroid:
+            clat, clon = spec.centroid
+            sites.sort(key=lambda s: (s.latitude - clat) ** 2 + (s.longitude - clon) ** 2)  # type: ignore[operator]
+        else:
+            sites.sort(key=lambda s: s.site_id)
+        return sites
 
 
 def _utc(value: datetime) -> datetime:

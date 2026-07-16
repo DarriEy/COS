@@ -110,6 +110,8 @@ asyncio_mode = "auto"
 addopts = "--cov=cos --cov-report=term-missing:skip-covered"
 markers = [
     "network: test reaches a real upstream API; deselected in CI via -m 'not network'",
+    "live: test requires a real downloaded product or provider credentials",
+    "anonymous_live: bounded credential-free provider sentinel used by scheduled health checks",
 ]
 
 [tool.coverage.run]

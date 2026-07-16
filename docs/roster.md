@@ -1,17 +1,18 @@
 # Connector roster
 
-The honest, status-labeled roster lives in `inventory/providers.yaml`. At
-scaffold time: **3 implemented**, 19 planned, 9 research, 1 manual — coverage
-≈ 9% of the enumerated non-streamflow surface.
+The canonical, generated roster lives in `inventory/providers.yaml`: **50
+implemented connectors across 20 kinds**. It is generated from connector class
+metadata, so a connector cannot be registered without appearing in the roster.
 
-| connector | kind | class | auth | status |
-|---|---|---|---|---|
-| grace | tws | gridded | earthdata | implemented |
-| snotel | swe | point_network | none | implemented (live-smoked) |
-| openet | et | flux_tower | openet | implemented |
+Validation is deliberately a second axis:
 
-All other connectors (gldas_tws, smap, modis_*, gleam, fluxnet, chirps, gpm,
-usgs_gw, ggmn, jrc_water, hubeau_waterlevel, ...) are `planned` / `research` /
-`manual` — unbuilt. See `inventory/providers.yaml`.
+- `live-parity`: real provider data compared with the native SYMFLUENCE path;
+- `live-spec`: real provider data checked against the published product spec
+  where no native handler exists;
+- `parity-by-construction`: hermetic comparison of units, masking, temporal
+  semantics, and reduction behavior, awaiting an operational live run.
 
-No connector has a recorded native parity grade yet.
+Use `cos providers` for the roster and `cos validation` for validation tiers,
+auth requirements, data-license posture, and the evidence grade. JSON output is
+available from both automation and release jobs with
+`cos validation --json-output`.

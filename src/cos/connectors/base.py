@@ -54,7 +54,7 @@ class BaseObservationConnector(ABC):
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=httpx.Timeout(120.0, connect=15.0),
-            headers={"User-Agent": "COS/0.1 (community-observation-service)"},
+            headers={"User-Agent": "COS/0.2 (community-observation-service)"},
             follow_redirects=True,
         )
         return self
