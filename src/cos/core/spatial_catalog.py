@@ -144,7 +144,7 @@ def _json_rows(payload: Any) -> list[Mapping[str, Any]]:
 
 def _vector_rows(path: Path) -> list[Mapping[str, Any]]:
     try:
-        import pyogrio  # type: ignore[import-untyped]
+        import pyogrio  # type: ignore[import-not-found,import-untyped]
     except ImportError as exc:
         raise DataFormatError(
             "spatial_catalog", "GeoPackage/Shapefile catalogs require the 'spatial' extra"
