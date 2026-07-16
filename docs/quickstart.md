@@ -7,6 +7,7 @@ cos kinds              # canonical kinds + SI units
 cos validation         # validation tiers and evidence coverage
 cos doctor             # local credentials/cache readiness
 cos sites snotel --bbox 46,-122,47,-121
+cos sites fluxnet_et --bbox 40,-89,42,-87 --limit 10
 cos fetch snotel -s snotel:679 --start 2022-01-01 --end 2022-03-01
 ```
 

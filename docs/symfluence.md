@@ -6,10 +6,11 @@ its non-streamflow `kinds`. `acquire()` runs the canonical fetch+reduce and writ
 the OBS_CSV_V1 protocol delivery + sidecar manifest, window-trimmed to half-open
 UTC `[start, end)`.
 
-With `DATA_ACCESS: community`, current SYMFLUENCE selects COS through the same
-`ObservationBackend` contract used by CSFS. It acquires and reduces the data,
-writes the evaluator's canonical observation file, and removes the corresponding
-native acquisition task. Selection or acquisition failure falls back to native.
+SYMFLUENCE can select COS through the same `ObservationBackend` contract used by
+CSFS when native acquisition is unavailable or fails. COS is the fallback, not
+the primary acquisition path. When selected, it acquires and reduces the data
+and writes the evaluator's canonical observation file. Provider selection order
+remains a SYMFLUENCE responsibility; this repository only registers the backend.
 
 | configuration key | COS provider | kind |
 |---|---|---|

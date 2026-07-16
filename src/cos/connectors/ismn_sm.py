@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 import structlog
 
 from cos.connectors.base import BaseObservationConnector
+from cos.connectors.ismn_catalog import load_ismn_catalog
 from cos.core.exceptions import ConnectorError
 from cos.core.models import (
     KIND_UNITS,
@@ -44,6 +45,7 @@ from cos.core.models import (
     SpatialReduction,
 )
 from cos.core.registry import register
+from cos.core.spatial_catalog import query_catalog
 
 logger = structlog.get_logger()
 
@@ -65,14 +67,44 @@ class ISMNSoilMoistureConnector(BaseObservationConnector):
     auth = frozenset({"ismn"})
 
     async def list_sites(self, spec: ReductionSpec) -> list[SiteRef]:
-        """Sites are the explicitly-requested ISMN stations.
-
-        ISMN station discovery by bbox (the native handler's metadata + Haversine
-        ranking) is a separate planned call; today the domain selects stations by
-        explicit id (``spec.station_ids`` / config ``station_ids``), the
-        deterministic parity-checked path.
-        """
-        return [self._site(sid, spec) for sid in self._station_ids(spec)]
+        """Resolve explicit stations or query a user-downloaded ISMN archive."""
+        station_ids = self._station_ids(spec)
+        if station_ids:
+            return [self._site(sid, spec) for sid in station_ids]
+        if spec.bbox is None and spec.centroid is None:
+            return []
+        source = (
+            spec.options.get("catalog_path")
+            or self.config.get("catalog_path")
+            or self.config.get("archive_path")
+        )
+        if not source:
+            raise ConnectorError(
+                self.slug,
+                "ISMN spatial discovery requires a portal-downloaded archive or normalized "
+                "station catalog via config 'archive_path'/'catalog_path'.",
+            )
+        records = query_catalog(
+            load_ismn_catalog(source),
+            bbox=spec.bbox,
+            centroid=spec.centroid,
+            limit=_site_limit(spec),
+        )
+        return [
+            SiteRef(
+                kind="station",
+                site_id=f"ismn:{record.feature_id}",
+                latitude=record.latitude,
+                longitude=record.longitude,
+                name=record.name or f"ISMN {record.feature_id}",
+                extra={
+                    key: str(record.properties[key])
+                    for key in ("network", "depth_from_m", "depth_to_m", "variable", "archive_member")
+                    if record.properties.get(key) not in (None, "")
+                },
+            )
+            for record in records
+        ]
 
     async def fetch_series(
         self,
@@ -117,6 +149,13 @@ class ISMNSoilMoistureConnector(BaseObservationConnector):
         ``[dates, values]`` pair and writes a ``DateTime,soil_moisture`` CSV; the
         canonical contract here consumes that same two-column CSV layout.
         """
+        if not self.config.get("allow_unsupported_dataviewer"):
+            raise ConnectorError(
+                self.slug,
+                "Automated ISMN portal downloads are not a documented API. Download an archive "
+                "through the official portal; opt into the legacy Data Viewer call explicitly "
+                "with config 'allow_unsupported_dataviewer=true'.",
+            )
         path = (
             "/dataviewer_load_variable/"
             f"?station_id={station_id}"
@@ -224,6 +263,13 @@ def _find_col(header: list[str], terms: tuple[str, ...]) -> int | None:
         if any(term in lower for term in terms):
             return i
     return None
+
+
+def _site_limit(spec: ReductionSpec) -> int:
+    try:
+        return max(1, int(spec.options.get("max_sites", 25)))
+    except (TypeError, ValueError):
+        return 25
 
 
 def _find_sm_fallback(header: list[str]) -> int | None:

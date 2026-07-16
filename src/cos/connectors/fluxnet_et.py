@@ -27,6 +27,7 @@ supplied FULLSET CSV (config ``path`` / ``csv_path``).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -45,6 +46,7 @@ from cos.core.models import (
     SpatialReduction,
 )
 from cos.core.registry import register
+from cos.core.spatial_catalog import normalize_records, query_catalog
 
 logger = structlog.get_logger()
 
@@ -80,15 +82,42 @@ class FluxnetETConnector(BaseObservationConnector):
     structural_class = "point_network"
     base_url = "https://amfcdn.lbl.gov/api/v1"
     auth = frozenset({"ameriflux"})
+    SITE_INVENTORY_PATH = "/site_display/AmeriFlux"
 
     async def list_sites(self, spec: ReductionSpec) -> list[SiteRef]:
-        """Sites are the explicitly-requested flux-tower stations.
-
-        AmeriFlux bbox discovery is a separate (planned) call; today the domain
-        selects towers by explicit id (``spec.station_ids`` / config), exactly as
-        the native handler reads ``FLUXNET_STATION`` from config.
-        """
-        return [self._site(sid, spec) for sid in self._station_ids(spec)]
+        """Resolve explicit towers or query the anonymous AmeriFlux inventory."""
+        station_ids = self._station_ids(spec)
+        if station_ids:
+            return [self._site(sid, spec) for sid in station_ids]
+        if spec.bbox is None and spec.centroid is None:
+            return []
+        response = await self._get(self.SITE_INVENTORY_PATH)
+        payload = response.json()
+        if not isinstance(payload, list):
+            raise DataFormatError(self.slug, "AmeriFlux site inventory was not a JSON row list")
+        rows = [_flatten_inventory_row(row) for row in payload if isinstance(row, dict)]
+        records = normalize_records(
+            rows,
+            id_fields=("SITE_ID",),
+            latitude_fields=("LOCATION_LAT",),
+            longitude_fields=("LOCATION_LONG",),
+            name_fields=("SITE_NAME",),
+        )
+        limit = _site_limit(spec)
+        return [
+            SiteRef(
+                kind="station",
+                site_id=f"fluxnet:{record.feature_id}",
+                latitude=record.latitude,
+                longitude=record.longitude,
+                name=record.name or f"AmeriFlux {record.feature_id}",
+                extra={
+                    "network": "AmeriFlux",
+                    **_string_metadata(record.properties, ("DATA_POLICY", "TOWER_BEGAN", "TOWER_END")),
+                },
+            )
+            for record in query_catalog(records, bbox=spec.bbox, centroid=spec.centroid, limit=limit)
+        ]
 
     async def fetch_series(
         self,
@@ -247,6 +276,27 @@ def _first_index(col: dict[str, int], aliases: tuple[str, ...]) -> int | None:
         if a in col:
             return col[a]
     return None
+
+
+def _flatten_inventory_row(row: dict) -> dict:
+    out = dict(row)
+    for group in ("GRP_LOCATION", "GRP_SITE_CHARACTER", "GRP_CLIM_AVG"):
+        nested = row.get(group)
+        if isinstance(nested, dict):
+            out.update(nested)
+    return out
+
+
+def _site_limit(spec: ReductionSpec) -> int:
+    raw = spec.options.get("max_sites", 25)
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return 25
+
+
+def _string_metadata(row: Mapping[str, object], fields: tuple[str, ...]) -> dict[str, str]:
+    return {field.lower(): str(row[field]) for field in fields if row.get(field) not in (None, "")}
 
 
 def _to_float(raw: str) -> float | None:

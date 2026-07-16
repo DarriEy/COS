@@ -26,3 +26,15 @@ provider and expected environment/netrc setup.
 fetches made without explicit station IDs preserve discovered station metadata
 and fetch at most five stations by default; set `max_fetch_sites` in the provider
 configuration when a different fan-out is intentional.
+
+AmeriFlux tower discovery is anonymous:
+
+```bash
+cos sites fluxnet_et --bbox 40,-89,42,-87 --limit 10
+```
+
+SWOT and ISMN use provider catalogs rather than undocumented portal scraping.
+Set `catalog_path` (or `pld_catalog_path` / `sword_catalog_path`) for SWOT and
+`archive_path` / `catalog_path` for ISMN in the provider configuration. Catalogs
+may be CSV, JSON/GeoJSON, or Parquet; install `community-observation-service[spatial]`
+to read GeoPackage and Shapefile catalogs.
