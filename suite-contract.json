@@ -1,0 +1,37 @@
+{
+  "contract_version": "1.1.0",
+  "contract_scope": "native_public_api",
+  "service": "cos",
+  "domain": "non_streamflow_observations",
+  "canonical_output": "time_series",
+  "timestamps": "UTC",
+  "interval_semantics": "point_timestamps",
+  "provenance_fields": [
+    "provider",
+    "source_info",
+    "fetched_at"
+  ],
+  "quality_statuses": [
+    "good",
+    "suspect",
+    "missing",
+    "estimated",
+    "raw"
+  ],
+  "quality_scope": "observation_points",
+  "error_categories": [
+    "configuration",
+    "authentication",
+    "rate_limit",
+    "upstream",
+    "data",
+    "dependency"
+  ],
+  "cli_exit_codes": {
+    "success": 0,
+    "usage_error": 2,
+    "upstream_error": 1,
+    "internal_error": 1
+  },
+  "symfluence_entrypoint": "cos.integrations.symfluence:register"
+}

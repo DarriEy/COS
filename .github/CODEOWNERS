@@ -1,0 +1,6 @@
+# Scientific contracts, release machinery, and privileged automation require review.
+/.github/ @DarriEy
+/src/cos/core/ @DarriEy
+/suite-contract.json @DarriEy
+/pyproject.toml @DarriEy
+

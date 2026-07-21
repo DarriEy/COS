@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import datetime
+from enum import StrEnum
 
 import httpx
 import structlog
@@ -35,6 +36,14 @@ from cos.core.models import ObservationKind, ObservationSeries, ReductionSpec, S
 logger = structlog.get_logger()
 
 
+class ConnectorLifecycle(StrEnum):
+    """Validated operational lifecycle for a connector."""
+
+    ACTIVE = "active"
+    DEPRECATED = "deprecated"
+    RETIRED = "retired"
+
+
 class BaseObservationConnector(ABC):
     """Interface every observation connector implements."""
 
@@ -42,15 +51,37 @@ class BaseObservationConnector(ABC):
     display_name: str                 # e.g. "NASA GRACE/GRACE-FO"
     kind: ObservationKind             # the single kind this connector serves
     structural_class: str             # "gridded" | "point_network" | "flux_tower"
+    # Operational lifecycle. Connectors remain discoverable while deprecated so
+    # callers receive an explicit transition signal; retired connectors should
+    # name a replacement and removal release before registry removal.
+    lifecycle: ConnectorLifecycle = ConnectorLifecycle.ACTIVE
+    replacement: str | None = None
+    retirement_note: str | None = None
     base_url: str
     #: auth-provider ids this connector needs; empty frozenset = anonymous.
     auth: frozenset[str] = frozenset()
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        super().__init_subclass__(**kwargs)
+        try:
+            cls.lifecycle = ConnectorLifecycle(cls.lifecycle)
+        except ValueError as exc:
+            raise TypeError(
+                f"{cls.__name__}.lifecycle must be active, deprecated, or retired"
+            ) from exc
+        if cls.lifecycle is ConnectorLifecycle.RETIRED and not cls.retirement_note:
+            raise TypeError(f"{cls.__name__} must declare retirement_note when retired")
 
     def __init__(self, config: dict | None = None) -> None:
         self.config = config or {}
         self._client: httpx.AsyncClient | None = None
 
     async def __aenter__(self) -> BaseObservationConnector:
+        if self.lifecycle is ConnectorLifecycle.RETIRED:
+            detail = self.retirement_note or "connector has been retired"
+            if self.replacement:
+                detail += f"; use {self.replacement!r} instead"
+            raise ConnectorError(self.slug, detail)
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=httpx.Timeout(120.0, connect=15.0),

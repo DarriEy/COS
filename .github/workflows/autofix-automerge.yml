@@ -48,7 +48,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          REPO_OWNER: ${{ github.repository_owner }}
           BRANCH: ${{ github.event.workflow_run.head_branch }}
+          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
 
@@ -57,12 +59,21 @@ jobs:
           echo "Service slug: $SVC"
 
           pr=$(gh pr list -R "$REPO" --head "$BRANCH" --state open \
-                 --json number,labels --jq '.[0]')
+                 --json number,labels,headRefOid,headRepositoryOwner --jq '.[0]')
           if [ -z "$pr" ] || [ "$pr" = "null" ]; then
             echo "No open PR for $BRANCH — nothing to merge."; exit 0
           fi
           number=$(echo "$pr" | jq -r '.number')
           labels=$(echo "$pr" | jq -r '[.labels[].name]')
+
+          # Bind this privileged workflow_run to the exact same-repository commit
+          # that passed CI. A matching branch name alone is not an authority check.
+          head_sha=$(echo "$pr" | jq -r '.headRefOid')
+          head_owner=$(echo "$pr" | jq -r '.headRepositoryOwner.login // empty')
+          if [ "$head_sha" != "$EXPECTED_SHA" ] || [ "$head_owner" != "$REPO_OWNER" ]; then
+            echo "PR #$number head identity does not match the successful workflow run — refusing merge."
+            exit 1
+          fi
 
           # Relabel the PR for a human and post a comment body from a file.
           # $1 = path to a markdown body file.
