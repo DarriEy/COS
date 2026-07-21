@@ -44,6 +44,16 @@ def test_health_groups_by_kind():
     assert "COS roster" in result.output
 
 
+def test_health_json_is_versioned_and_reports_lifecycle():
+    result = CliRunner().invoke(cli, ["health", "--json-output"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["schema_version"] == 1
+    assert payload["service"] == "cos"
+    assert payload["lifecycle"]["active"] == len(payload["connectors"])
+    assert all(row["lifecycle"] == "active" for row in payload["connectors"])
+
+
 def test_validation_json_is_machine_readable():
     result = CliRunner().invoke(cli, ["validation", "--json-output"])
     assert result.exit_code == 0

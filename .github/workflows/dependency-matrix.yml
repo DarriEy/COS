@@ -1,0 +1,36 @@
+name: Dependency Matrix
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dependencies:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.11"
+            resolution: minimum
+          - python-version: "3.13"
+            resolution: latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install resolver
+        run: python -m pip install uv==0.11.30
+      - name: Install direct lower bounds
+        if: ${{ matrix.resolution == 'minimum' }}
+        run: uv pip install --system --resolution lowest-direct -e ".[dev]"
+      - name: Install latest compatible dependencies
+        if: ${{ matrix.resolution == 'latest' }}
+        run: uv pip install --system --upgrade -e ".[dev]"
+      - name: Offline tests
+        run: pytest tests/ -q --tb=short -m "not network"

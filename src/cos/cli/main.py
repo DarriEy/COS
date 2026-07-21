@@ -55,12 +55,16 @@ def kinds(ctx: click.Context) -> None:
 
 
 @cli.command()
+@click.option("--json-output", "as_json", is_flag=True, help="Emit versioned status JSON")
 @click.pass_context
-def health(ctx: click.Context) -> None:
+def health(ctx: click.Context, as_json: bool) -> None:
     """Report the connector roster grouped by kind."""
-    from cos.core.health import roster_health, summarize_roster
+    from cos.core.health import roster_health, roster_status_document, summarize_roster
 
     rows = roster_health()
+    if as_json:
+        click.echo(json.dumps(roster_status_document(rows), indent=2))
+        return
     summary = summarize_roster(rows)
     parts = "  ".join(f"{k}={v}" for k, v in sorted(summary.items()))
     click.echo(f"\n  COS roster ({len(rows)} connectors)  {parts}")
