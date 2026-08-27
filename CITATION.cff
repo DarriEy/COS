@@ -10,8 +10,8 @@ authors:
     affiliation: "University of Calgary"
 repository-code: "https://github.com/DarriEy/COS"
 license: GPL-3.0-or-later
-version: 0.1.0
-date-released: 2026-06-13
+version: 0.2.0
+date-released: 2026-07-16
 keywords:
   - hydrology
   - observations

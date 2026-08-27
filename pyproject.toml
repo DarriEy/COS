@@ -39,7 +39,7 @@ dependencies = [
 # HDF-EOS5 product (ECO_L2G_LSTE) is read via h5py.
 gridded = [
     "xarray>=2024.1",
-    "netcdf4>=1.6",
+    "netcdf4>=1.7.1",  # first numpy-2-ABI wheels (1.6.0 also lacks py3.11 wheels)
     "h5py>=3.0",
 ]
 # Live-fetch of Earthdata-gated gridded products (GRACE JPL mascon, ...).
@@ -51,7 +51,7 @@ livehttp = [
     "truststore>=0.9",
 ]
 pandas = [
-    "pandas>=2.0",
+    "pandas>=2.2.2",  # first numpy-2-ABI wheels
 ]
 spatial = [
     "pyogrio>=0.10",
@@ -63,14 +63,14 @@ docs = [
 ]
 dev = [
     "pytest>=8.0",
-    "pytest-asyncio>=0.23",
+    "pytest-asyncio>=0.23.5",  # pytest 8 collection compatibility
     "pytest-cov>=5.0",
     "respx>=0.21",
     "xarray>=2024.1",
-    "netcdf4>=1.6",
+    "netcdf4>=1.7.1",  # first numpy-2-ABI wheels (1.6.0 also lacks py3.11 wheels)
     "h5py>=3.0",
     "earthaccess>=0.9",
-    "pandas>=2.0",
+    "pandas>=2.2.2",  # first numpy-2-ABI wheels
     "ruff>=0.4",
     "mypy>=1.10",
     "types-PyYAML",

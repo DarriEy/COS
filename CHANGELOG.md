@@ -6,6 +6,17 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- Dependency floors raised to the oldest working versions: `netcdf4>=1.7.1`
+  and `pandas>=2.2.2` (first numpy-2-ABI wheels), `pytest-asyncio>=0.23.5`
+  (pytest 8 collection).
+
+### Fixed
+
+- The weekly live-health workflow's pytest invocation was split by a stray
+  `+` literal, failing every scheduled run since early August.
+
 ### Added
 - Provider-neutral spatial catalogs for CSV, JSON/GeoJSON, Parquet, and optional
   GeoPackage/Shapefile inputs, including dateline-safe bbox filtering.

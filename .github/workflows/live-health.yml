@@ -30,7 +30,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          pytest tests/connectors -m anonymous_live --no-cov --tb=short -q +            --junitxml=live-health.xml
+          pytest tests/connectors -m anonymous_live --no-cov --tb=short -q --junitxml=live-health.xml
           code=$?
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit 0
