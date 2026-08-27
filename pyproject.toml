@@ -40,7 +40,7 @@ dependencies = [
 gridded = [
     "xarray>=2024.1",
     "netcdf4>=1.7.1",  # first numpy-2-ABI wheels (1.6.0 also lacks py3.11 wheels)
-    "h5py>=3.0",
+    "h5py>=3.8",  # first py3.11 wheels
 ]
 # Live-fetch of Earthdata-gated gridded products (GRACE JPL mascon, ...).
 earthdata = [
@@ -68,7 +68,7 @@ dev = [
     "respx>=0.21",
     "xarray>=2024.1",
     "netcdf4>=1.7.1",  # first numpy-2-ABI wheels (1.6.0 also lacks py3.11 wheels)
-    "h5py>=3.0",
+    "h5py>=3.8",  # first py3.11 wheels
     "earthaccess>=0.9",
     "pandas>=2.2.2",  # first numpy-2-ABI wheels
     "ruff>=0.4",
